@@ -396,7 +396,8 @@ export class ApiSessionClient extends EventEmitter {
             role: 'agent',
             content: {
                 type: 'codex',
-                data: body
+                data: body,
+                timestamp: new Date().toISOString()
             },
             meta: {
                 sentFrom: 'cli'
@@ -425,7 +426,8 @@ export class ApiSessionClient extends EventEmitter {
             content: {
                 id: id ?? randomUUID(),
                 type: 'event',
-                data: event
+                data: event,
+                timestamp: new Date().toISOString()
             }
         }
 
@@ -618,5 +620,25 @@ export class ApiSessionClient extends EventEmitter {
         this.rpcHandlerManager.onSocketDisconnect()
         this.terminalManager.closeAll()
         this.socket.disconnect()
+    }
+
+    /**
+     * Get the rewind context summary from metadata.
+     * Used to inject historical conversation context when resuming after rewinding past compaction.
+     */
+    getRewindContextSummary(): string | undefined {
+        return (this.metadata as Record<string, unknown> | null)?.rewindContextSummary as string | undefined
+    }
+
+    /**
+     * Clear the rewind context summary from metadata.
+     * Called after successfully injecting the context into the system prompt.
+     */
+    clearRewindContextSummary(): void {
+        this.updateMetadata((metadata) => {
+            const updated = { ...metadata } as Record<string, unknown>
+            delete updated.rewindContextSummary
+            return updated as typeof metadata
+        })
     }
 }

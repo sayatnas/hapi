@@ -292,7 +292,19 @@ export class SyncEngine {
         worktreeName?: string,
         resumeSessionId?: string
     ): Promise<{ type: 'success'; sessionId: string } | { type: 'error'; message: string }> {
-        return await this.rpcGateway.spawnSession(machineId, directory, agent, model, yolo, sessionType, worktreeName, resumeSessionId)
+        const spawnResult = await this.rpcGateway.spawnSession(machineId, directory, agent, model, yolo, sessionType, worktreeName, resumeSessionId)
+
+        if (spawnResult.type !== 'success') {
+            return spawnResult
+        }
+
+        // Wait for session to become active before returning (prevents race condition in YOLO mode)
+        const becameActive = await this.waitForSessionActive(spawnResult.sessionId)
+        if (!becameActive) {
+            return { type: 'error', message: 'Session failed to become active' }
+        }
+
+        return spawnResult
     }
 
     async resumeSession(sessionId: string, namespace: string): Promise<ResumeSessionResult> {
@@ -441,5 +453,87 @@ export class SyncEngine {
         error?: string
     }> {
         return await this.rpcGateway.listSkills(sessionId)
+    }
+
+    /**
+     * Get checkpoints (user messages) for the rewind feature.
+     */
+    getCheckpoints(sessionId: string): Array<{ seq: number; createdAt: number; preview: string }> {
+        return this.messageService.getCheckpoints(sessionId)
+    }
+
+    /**
+     * Rewind a session to a specific sequence number.
+     * Deletes all messages after the specified seq.
+     *
+     * IMPORTANT: This only rewinds the CONVERSATION (messages in HAPI's database).
+     * It does NOT rewind CODE CHANGES - Claude Code's git-based checkpointing
+     * is an interactive CLI feature not exposed through the SDK.
+     *
+     * To revert code changes, users should use git directly:
+     *   git checkout <file>  - revert specific file
+     *   git stash            - stash all changes
+     *   git reset --hard     - discard all changes
+     *
+     * When rewinding past a compaction boundary, a contextSummary is returned
+     * that should be injected into the system prompt when resuming.
+     *
+     * @returns The number of messages deleted and optional context summary
+     */
+    async rewindSession(sessionId: string, targetSeq: number): Promise<{
+        success: boolean
+        deletedCount: number
+        crossedCompaction?: boolean
+        contextSummary?: string
+        error?: string
+    }> {
+        try {
+            // Check if we're crossing a compaction boundary
+            const compactionBoundaries = this.messageService.findCompactionBoundaries(sessionId)
+            const crossedCompaction = compactionBoundaries.some(boundary => boundary > targetSeq)
+
+            // If crossing compaction, build context summary from messages before the rewind point
+            let contextSummary: string | undefined
+            if (crossedCompaction) {
+                contextSummary = this.messageService.buildConversationSummary(sessionId, targetSeq)
+            }
+
+            // Archive the session first (kills the running CLI process and marks inactive)
+            // This preserves the pre-rewind state and ensures a clean restart
+            try {
+                await this.archiveSession(sessionId)
+            } catch {
+                // Session may not be running, that's ok
+            }
+
+            const deletedCount = this.messageService.deleteMessagesAfter(sessionId, targetSeq)
+
+            // Clear the Claude session ID from metadata so the next message starts fresh
+            // This forces the SDK to rebuild context from remaining messages
+            await this.sessionCache.clearClaudeSessionId(sessionId)
+
+            // Store context summary in metadata for CLI to use when resuming
+            if (contextSummary) {
+                await this.sessionCache.setRewindContextSummary(sessionId, contextSummary)
+            } else {
+                // Clear any previous context summary
+                await this.sessionCache.setRewindContextSummary(sessionId, undefined)
+            }
+
+            // Emit rewind event to notify clients
+            this.eventPublisher.emit({
+                type: 'session-rewound',
+                sessionId,
+                targetSeq,
+                deletedCount,
+                crossedCompaction,
+                contextSummary
+            })
+
+            return { success: true, deletedCount, crossedCompaction, contextSummary }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to rewind session'
+            return { success: false, deletedCount: 0, error: message }
+        }
     }
 }

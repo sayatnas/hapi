@@ -45,7 +45,9 @@ export const MetadataSchema = z.object({
     archivedBy: z.string().optional(),
     archiveReason: z.string().optional(),
     flavor: z.string().nullish(),
-    worktree: WorktreeMetadataSchema.optional()
+    worktree: WorktreeMetadataSchema.optional(),
+    // Context summary for restoring conversation after rewinding past compaction
+    rewindContextSummary: z.string().optional()
 })
 
 export type Metadata = z.infer<typeof MetadataSchema>
@@ -187,6 +189,13 @@ export const SyncEventSchema = z.discriminatedUnion('type', [
             status: z.string(),
             subscriptionId: z.string().optional()
         }).optional()
+    }),
+    SessionChangedSchema.extend({
+        type: z.literal('session-rewound'),
+        targetSeq: z.number(),
+        deletedCount: z.number(),
+        crossedCompaction: z.boolean().optional(),
+        contextSummary: z.string().optional()
     })
 ])
 

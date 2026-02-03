@@ -218,6 +218,27 @@ export class MessageQueue2<T> {
     }
 
     /**
+     * Pop the first message from the queue without waiting.
+     * Used for real-time steering to consume messages when injecting mid-turn.
+     * Returns null if queue is empty.
+     */
+    popFirst(): { message: string, mode: T, hash: string, isolate: boolean } | null {
+        if (this.queue.length === 0) {
+            return null;
+        }
+
+        const item = this.queue.shift()!;
+        logger.debug(`[MessageQueue2] popFirst() consumed message with mode hash: ${item.modeHash}. Queue size: ${this.queue.length}`);
+
+        return {
+            message: item.message,
+            mode: item.mode,
+            hash: item.modeHash,
+            isolate: item.isolate ?? false
+        };
+    }
+
+    /**
      * Wait for messages and return all messages with the same mode as a single string
      * Returns { message: string, mode: T } or null if aborted/closed
      */

@@ -161,6 +161,18 @@ export default {
   'tool.rejected': '已拒绝',
   'tool.cancel': '取消',
   'tool.exitPlan': '退出计划模式',
+
+  // Plan exit options
+  'plan.chooseAction': '选择如何执行计划：',
+  'plan.approve': '批准计划',
+  'plan.approve.desc': '按照提议执行计划',
+  'plan.approveAutoEdits': '批准 + 自动接受编辑',
+  'plan.approveAutoEdits.desc': '执行并自动批准所有文件编辑',
+  'plan.approveYolo': '批准 + YOLO 模式',
+  'plan.approveYolo.desc': '执行时不需要任何权限提示',
+  'plan.approveDangerousYolo': '批准 + 危险 YOLO',
+  'plan.approveDangerousYolo.desc': '使用 --dangerously-skip-permissions 执行（Claude 全权处理）',
+  'plan.deny': '拒绝计划',
   'tool.patch': '补丁',
   'tool.input': '输入',
   'tool.result': '结果',
@@ -266,4 +278,7 @@ export default {
   'misc.permissionRequired': '需要权限',
   'misc.percentLeft': '剩余 {percent}%',
   'misc.online': '在线',
+
+  // Message status
+  'message.queued': '排队中',
 } as const

@@ -341,6 +341,82 @@ export class SessionCache {
         this.refreshSession(newSessionId)
     }
 
+    /**
+     * Clear the Claude session ID from metadata to force a fresh SDK session on next message.
+     * Used by /rewind to ensure the conversation restarts from the checkpoint.
+     *
+     * NOTE: This only rewinds the conversation (messages in HAPI's database).
+     * It does NOT rewind code changes - Claude Code's git-based checkpointing
+     * is an interactive CLI feature not exposed through the SDK.
+     * Users should use git directly to revert code changes if needed.
+     */
+    async clearClaudeSessionId(sessionId: string): Promise<void> {
+        const session = this.sessions.get(sessionId)
+        if (!session) {
+            return
+        }
+
+        const currentMetadata = session.metadata
+        if (!currentMetadata) {
+            return
+        }
+
+        // Clear the session ID for whichever agent flavor is being used
+        const newMetadata = { ...currentMetadata }
+        delete (newMetadata as Record<string, unknown>).claudeSessionId
+        delete (newMetadata as Record<string, unknown>).codexSessionId
+        delete (newMetadata as Record<string, unknown>).geminiSessionId
+        delete (newMetadata as Record<string, unknown>).opencodeSessionId
+
+        const result = this.store.sessions.updateSessionMetadata(
+            sessionId,
+            newMetadata,
+            session.metadataVersion,
+            session.namespace,
+            { touchUpdatedAt: true }
+        )
+
+        if (result.result === 'success') {
+            this.refreshSession(sessionId)
+        }
+    }
+
+    /**
+     * Set the rewind context summary in session metadata.
+     * Used when rewinding past a compaction boundary to restore historical context.
+     * The CLI will read this and inject it into the system prompt when resuming.
+     */
+    async setRewindContextSummary(sessionId: string, contextSummary: string | undefined): Promise<void> {
+        const session = this.sessions.get(sessionId)
+        if (!session) {
+            return
+        }
+
+        const currentMetadata = session.metadata
+        if (!currentMetadata) {
+            return
+        }
+
+        const newMetadata = { ...currentMetadata } as Record<string, unknown>
+        if (contextSummary) {
+            newMetadata.rewindContextSummary = contextSummary
+        } else {
+            delete newMetadata.rewindContextSummary
+        }
+
+        const result = this.store.sessions.updateSessionMetadata(
+            sessionId,
+            newMetadata,
+            session.metadataVersion,
+            session.namespace,
+            { touchUpdatedAt: true }
+        )
+
+        if (result.result === 'success') {
+            this.refreshSession(sessionId)
+        }
+    }
+
     private mergeSessionMetadata(oldMetadata: unknown | null, newMetadata: unknown | null): unknown | null {
         if (!oldMetadata || typeof oldMetadata !== 'object') {
             return newMetadata

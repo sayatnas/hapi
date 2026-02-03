@@ -33,6 +33,7 @@ const BUILTIN_COMMANDS: Record<string, SlashCommand[]> = {
         { name: 'cost', description: 'Show the total cost and duration of the current session', source: 'builtin' },
         { name: 'doctor', description: 'Diagnose and verify your Claude Code installation and settings', source: 'builtin' },
         { name: 'plan', description: 'View or open the current session plan', source: 'builtin' },
+        { name: 'rewind', description: 'Rewind conversation to a previous checkpoint (conversation only, not code)', source: 'builtin' },
         { name: 'stats', description: 'Show your Claude Code usage statistics and activity', source: 'builtin' },
         { name: 'status', description: 'Show Claude Code status including version, model, account, and API connectivity', source: 'builtin' },
     ],

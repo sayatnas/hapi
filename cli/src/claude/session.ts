@@ -125,4 +125,20 @@ export class Session extends AgentSessionBase<EnhancedMode> {
         this.claudeArgs = filteredArgs.length > 0 ? filteredArgs : undefined;
         logger.debug(`[Session] Consumed one-time flags, remaining args:`, this.claudeArgs);
     };
+
+    /**
+     * Get the rewind context summary from metadata.
+     * Used to inject historical conversation context when resuming after rewinding past compaction.
+     */
+    getRewindContextSummary = (): string | undefined => {
+        return this.client.getRewindContextSummary();
+    };
+
+    /**
+     * Clear the rewind context summary from metadata.
+     * Called after successfully injecting the context into the system prompt.
+     */
+    clearRewindContextSummary = (): void => {
+        this.client.clearRewindContextSummary();
+    };
 }

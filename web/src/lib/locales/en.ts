@@ -159,6 +159,18 @@ export default {
   'tool.rejected': 'Rejected',
   'tool.cancel': 'Cancel',
   'tool.exitPlan': 'Exit Plan Mode',
+
+  // Plan exit options
+  'plan.chooseAction': 'Choose how to proceed with the plan:',
+  'plan.approve': 'Approve Plan',
+  'plan.approve.desc': 'Execute the plan as proposed',
+  'plan.approveAutoEdits': 'Approve + Auto-accept Edits',
+  'plan.approveAutoEdits.desc': 'Execute and auto-approve all file edits',
+  'plan.approveYolo': 'Approve + YOLO Mode',
+  'plan.approveYolo.desc': 'Execute without any permission prompts',
+  'plan.approveDangerousYolo': 'Approve + Dangerous YOLO',
+  'plan.approveDangerousYolo.desc': 'Execute with --dangerously-skip-permissions (Claude handles all)',
+  'plan.deny': 'Reject Plan',
   'tool.patch': 'Patch',
   'tool.input': 'Input',
   'tool.result': 'Result',
@@ -264,4 +276,7 @@ export default {
   'misc.permissionRequired': 'permission required',
   'misc.percentLeft': '{percent}% left',
   'misc.online': 'online',
+
+  // Message status
+  'message.queued': 'Queued',
 } as const

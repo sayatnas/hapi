@@ -1,4 +1,4 @@
-export const CLAUDE_PERMISSION_MODES = ['default', 'acceptEdits', 'bypassPermissions', 'plan'] as const
+export const CLAUDE_PERMISSION_MODES = ['default', 'acceptEdits', 'bypassPermissions', 'dangerouslySkipPermissions', 'plan'] as const
 export type ClaudePermissionMode = typeof CLAUDE_PERMISSION_MODES[number]
 
 export const CODEX_PERMISSION_MODES = ['default', 'read-only', 'safe-yolo', 'yolo'] as const
@@ -14,6 +14,7 @@ export const PERMISSION_MODES = [
     'default',
     'acceptEdits',
     'bypassPermissions',
+    'dangerouslySkipPermissions',
     'plan',
     'read-only',
     'safe-yolo',
@@ -31,6 +32,7 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
     acceptEdits: 'Accept Edits',
     plan: 'Plan Mode',
     bypassPermissions: 'Yolo',
+    dangerouslySkipPermissions: 'Dangerous Yolo',
     'read-only': 'Read Only',
     'safe-yolo': 'Safe Yolo',
     yolo: 'Yolo'
@@ -43,6 +45,7 @@ export const PERMISSION_MODE_TONES: Record<PermissionMode, PermissionModeTone> =
     acceptEdits: 'warning',
     plan: 'info',
     bypassPermissions: 'danger',
+    dangerouslySkipPermissions: 'danger',
     'read-only': 'warning',
     'safe-yolo': 'warning',
     yolo: 'danger'

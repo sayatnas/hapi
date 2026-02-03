@@ -310,8 +310,8 @@ export class ApiClient {
     async approvePermission(
         sessionId: string,
         requestId: string,
-        modeOrOptions?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | {
-            mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan'
+        modeOrOptions?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'dangerouslySkipPermissions' | 'plan' | {
+            mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'dangerouslySkipPermissions' | 'plan'
             allowTools?: string[]
             decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort'
             answers?: Record<string, string[]> | Record<string, { answers: string[] }>
@@ -406,5 +406,38 @@ export class ApiClient {
             method: 'POST',
             body: JSON.stringify(options || {})
         })
+    }
+
+    /**
+     * Get checkpoints (user messages) for the rewind feature.
+     * NOTE: This only supports conversation rewind, not code rewind.
+     */
+    async getCheckpoints(sessionId: string): Promise<{
+        success: boolean
+        checkpoints?: Array<{ seq: number; createdAt: number; preview: string }>
+        error?: string
+    }> {
+        return await this.request(
+            `/api/sessions/${encodeURIComponent(sessionId)}/checkpoints`
+        )
+    }
+
+    /**
+     * Rewind session to a specific checkpoint (conversation only).
+     * NOTE: This only rewinds the conversation, not code changes.
+     * Use git directly to revert code changes.
+     */
+    async rewindSession(sessionId: string, seq: number): Promise<{
+        success: boolean
+        deletedCount?: number
+        error?: string
+    }> {
+        return await this.request(
+            `/api/sessions/${encodeURIComponent(sessionId)}/rewind`,
+            {
+                method: 'POST',
+                body: JSON.stringify({ seq })
+            }
+        )
     }
 }

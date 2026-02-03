@@ -118,4 +118,35 @@ export class MessageService {
             }
         })
     }
+
+    /**
+     * Get checkpoints (user messages) for the rewind feature.
+     */
+    getCheckpoints(sessionId: string): Array<{ seq: number; createdAt: number; preview: string }> {
+        return this.store.messages.getCheckpoints(sessionId)
+    }
+
+    /**
+     * Delete all messages after a specific sequence number.
+     * Used by /rewind to truncate conversation history.
+     * @returns The number of messages deleted
+     */
+    deleteMessagesAfter(sessionId: string, afterSeq: number): number {
+        return this.store.messages.deleteMessagesAfter(sessionId, afterSeq)
+    }
+
+    /**
+     * Find compaction boundaries (where context was summarized).
+     */
+    findCompactionBoundaries(sessionId: string): number[] {
+        return this.store.messages.findCompactionBoundaries(sessionId)
+    }
+
+    /**
+     * Build a conversation summary for context injection.
+     * Used when rewinding past a compaction boundary.
+     */
+    buildConversationSummary(sessionId: string, upToSeq: number): string {
+        return this.store.messages.buildConversationSummary(sessionId, upToSeq)
+    }
 }

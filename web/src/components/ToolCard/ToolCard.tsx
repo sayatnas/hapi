@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { PermissionFooter } from '@/components/ToolCard/PermissionFooter'
 import { AskUserQuestionFooter } from '@/components/ToolCard/AskUserQuestionFooter'
 import { RequestUserInputFooter } from '@/components/ToolCard/RequestUserInputFooter'
+import { PlanExitFooter } from '@/components/ToolCard/views/PlanExitFooter'
 import { isAskUserQuestionToolName } from '@/components/ToolCard/askUserQuestion'
 import { isRequestUserInputToolName } from '@/components/ToolCard/requestUserInput'
 import { getToolPresentation } from '@/components/ToolCard/knownTools'
@@ -313,6 +314,7 @@ function ToolCardInner(props: ToolCardProps) {
     const permission = props.block.tool.permission
     const isAskUserQuestion = isAskUserQuestionToolName(toolName)
     const isRequestUserInput = isRequestUserInputToolName(toolName)
+    const isExitPlanMode = toolName === 'ExitPlanMode' || toolName === 'exit_plan_mode'
     const isQuestionTool = isAskUserQuestion || isRequestUserInput
     const showsPermissionFooter = Boolean(permission && (
         permission.status === 'pending'
@@ -442,6 +444,14 @@ function ToolCardInner(props: ToolCardProps) {
                         />
                     ) : isRequestUserInput && permission?.status === 'pending' ? (
                         <RequestUserInputFooter
+                            api={props.api}
+                            sessionId={props.sessionId}
+                            tool={props.block.tool}
+                            disabled={props.disabled}
+                            onDone={props.onDone}
+                        />
+                    ) : isExitPlanMode ? (
+                        <PlanExitFooter
                             api={props.api}
                             sessionId={props.sessionId}
                             tool={props.block.tool}

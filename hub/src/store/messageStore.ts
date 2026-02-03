@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite'
 
 import type { StoredMessage } from './types'
-import { addMessage, getMessages, getMessagesAfter, mergeSessionMessages } from './messages'
+import { addMessage, buildConversationSummary, deleteMessagesAfter, findCompactionBoundaries, getCheckpoints, getMessages, getMessagesAfter, mergeSessionMessages } from './messages'
 
 export class MessageStore {
     private readonly db: Database
@@ -24,5 +24,21 @@ export class MessageStore {
 
     mergeSessionMessages(fromSessionId: string, toSessionId: string): { moved: number; oldMaxSeq: number; newMaxSeq: number } {
         return mergeSessionMessages(this.db, fromSessionId, toSessionId)
+    }
+
+    getCheckpoints(sessionId: string): Array<{ seq: number; createdAt: number; preview: string }> {
+        return getCheckpoints(this.db, sessionId)
+    }
+
+    deleteMessagesAfter(sessionId: string, afterSeq: number): number {
+        return deleteMessagesAfter(this.db, sessionId, afterSeq)
+    }
+
+    findCompactionBoundaries(sessionId: string): number[] {
+        return findCompactionBoundaries(this.db, sessionId)
+    }
+
+    buildConversationSummary(sessionId: string, upToSeq: number): string {
+        return buildConversationSummary(this.db, sessionId, upToSeq)
     }
 }

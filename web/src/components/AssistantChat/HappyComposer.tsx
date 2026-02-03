@@ -107,7 +107,8 @@ export function HappyComposer(props: {
         const path = (attachment as { path?: string }).path
         return typeof path === 'string' && path.length > 0
     })
-    const canSend = (hasText || hasAttachments) && attachmentsReady && !controlsDisabled && !threadIsRunning
+    // Allow sending even when threadIsRunning - messages will be queued
+    const canSend = (hasText || hasAttachments) && attachmentsReady && !controlsDisabled
 
     const [inputState, setInputState] = useState<TextInputState>({
         text: '',
@@ -372,19 +373,21 @@ export function HappyComposer(props: {
         setShowContinueHint(false)
     }, [attachmentsReady])
 
+    // Permission and model mode can be changed even during processing
+    // (they only affect future tool calls, not current execution)
     const handlePermissionChange = useCallback((mode: PermissionMode) => {
-        if (!onPermissionModeChange || controlsDisabled) return
+        if (!onPermissionModeChange) return
         onPermissionModeChange(mode)
         setShowSettings(false)
         haptic('light')
-    }, [onPermissionModeChange, controlsDisabled, haptic])
+    }, [onPermissionModeChange, haptic])
 
     const handleModelChange = useCallback((mode: ModelMode) => {
-        if (!onModelModeChange || controlsDisabled) return
+        if (!onModelModeChange) return
         onModelModeChange(mode)
         setShowSettings(false)
         haptic('light')
-    }, [onModelModeChange, controlsDisabled, haptic])
+    }, [onModelModeChange, haptic])
 
     const showPermissionSettings = Boolean(onPermissionModeChange && permissionModeOptions.length > 0)
     const showModelSettings = Boolean(onModelModeChange && !isCodexFamilyFlavor(agentFlavor))
@@ -410,12 +413,7 @@ export function HappyComposer(props: {
                                     <button
                                         key={option.mode}
                                         type="button"
-                                        disabled={controlsDisabled}
-                                        className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
-                                            controlsDisabled
-                                                ? 'cursor-not-allowed opacity-50'
-                                                : 'cursor-pointer hover:bg-[var(--app-secondary-bg)]'
-                                        }`}
+                                        className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--app-secondary-bg)]"
                                         onClick={() => handlePermissionChange(option.mode)}
                                         onMouseDown={(e) => e.preventDefault()}
                                     >
@@ -451,12 +449,7 @@ export function HappyComposer(props: {
                                     <button
                                         key={mode}
                                         type="button"
-                                        disabled={controlsDisabled}
-                                        className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
-                                            controlsDisabled
-                                                ? 'cursor-not-allowed opacity-50'
-                                                : 'cursor-pointer hover:bg-[var(--app-secondary-bg)]'
-                                        }`}
+                                        className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--app-secondary-bg)]"
                                         onClick={() => handleModelChange(mode)}
                                         onMouseDown={(e) => e.preventDefault()}
                                     >

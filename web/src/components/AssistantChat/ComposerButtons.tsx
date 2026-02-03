@@ -341,7 +341,6 @@ export function ComposerButtons(props: {
                         title={t('composer.settings')}
                         className="settings-button flex h-8 w-8 items-center justify-center rounded-full text-[var(--app-fg)]/60 transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
                         onClick={props.onSettingsToggle}
-                        disabled={props.controlsDisabled}
                     >
                         <SettingsIcon />
                     </button>

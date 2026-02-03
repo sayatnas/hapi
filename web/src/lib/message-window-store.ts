@@ -389,7 +389,12 @@ export function ingestIncomingMessages(sessionId: string, incoming: DecryptedMes
         return
     }
     updateState(sessionId, (prev) => {
-        if (prev.atBottom) {
+        // Always show messages immediately if:
+        // 1. User is at the bottom, OR
+        // 2. There are very few pending messages (keeps UI responsive during streaming)
+        // This ensures real-time updates are visible without requiring manual scroll
+        const shouldShowImmediately = prev.atBottom || prev.pendingVisibleCount < 3
+        if (shouldShowImmediately) {
             const merged = mergeMessages(prev.messages, incoming)
             const trimmed = trimVisible(merged, 'append')
             const pending = filterPendingAgainstVisible(prev.pending, trimmed)

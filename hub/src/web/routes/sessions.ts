@@ -18,6 +18,10 @@ const renameSessionSchema = z.object({
     name: z.string().min(1).max(255)
 })
 
+const rewindSessionSchema = z.object({
+    seq: z.number().int().min(0)
+})
+
 const uploadSchema = z.object({
     filename: z.string().min(1).max(255),
     content: z.string().min(1),
@@ -391,6 +395,70 @@ export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null): Ho
                 success: false,
                 error: error instanceof Error ? error.message : 'Failed to list skills'
             })
+        }
+    })
+
+    // Get checkpoints (user messages) for the rewind feature
+    // NOTE: This only supports conversation rewind, not code rewind.
+    // Claude Code's git-based checkpointing is not exposed through the SDK.
+    app.get('/sessions/:id/checkpoints', (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireSessionFromParam(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        try {
+            const checkpoints = engine.getCheckpoints(sessionResult.sessionId)
+            return c.json({ success: true, checkpoints })
+        } catch (error) {
+            return c.json({
+                success: false,
+                error: error instanceof Error ? error.message : 'Failed to get checkpoints'
+            }, 500)
+        }
+    })
+
+    // Rewind session to a specific checkpoint (conversation only)
+    // NOTE: This only rewinds the conversation (messages in HAPI's database).
+    // It does NOT rewind code changes - use git directly for that.
+    app.post('/sessions/:id/rewind', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireSessionFromParam(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const body = await c.req.json().catch(() => null)
+        const parsed = rewindSessionSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body: seq (number) is required' }, 400)
+        }
+
+        try {
+            const result = await engine.rewindSession(sessionResult.sessionId, parsed.data.seq)
+            if (!result.success) {
+                return c.json({ success: false, error: result.error }, 500)
+            }
+            return c.json({
+                success: true,
+                deletedCount: result.deletedCount,
+                crossedCompaction: result.crossedCompaction,
+                contextSummary: result.contextSummary
+            })
+        } catch (error) {
+            return c.json({
+                success: false,
+                error: error instanceof Error ? error.message : 'Failed to rewind session'
+            }, 500)
         }
     })
 

@@ -4,7 +4,7 @@ import { RemoteModeDisplay } from "@/ui/ink/RemoteModeDisplay";
 import { claudeRemote } from "./claudeRemote";
 import { PermissionHandler } from "./utils/permissionHandler";
 import { Future } from "@/utils/future";
-import { SDKAssistantMessage, SDKMessage, SDKUserMessage } from "./sdk";
+import { SDKAssistantMessage, SDKMessage, SDKUserMessage, AbortError } from "./sdk";
 import { formatClaudeMessageForInk } from "@/ui/messageFormatterInk";
 import { logger } from "@/ui/logger";
 import { SDKToLogConverter } from "./utils/sdkToLogConverter";
@@ -353,17 +353,42 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                             }
                         },
                         signal: controller.signal,
+                        // Pass rewind context summary for cross-compaction rewind support
+                        rewindContextSummary: session.getRewindContextSummary(),
+                        onRewindContextConsumed: () => {
+                            session.clearRewindContextSummary();
+                        },
+                        // Pass message queue for real-time steering (mid-turn message injection)
+                        messageQueue: session.queue,
                     });
 
                     session.consumeOneTimeFlags();
 
                     if (!this.exitReason && controller.signal.aborted) {
                         session.client.sendSessionEvent({ type: 'message', message: 'Aborted by user' });
+                        // Send ready event so frontend knows we can accept new messages
+                        // Note: onThinkingChange(false) was already called in claudeRemote's finally block
+                        if (!pending && session.queue.size() === 0) {
+                            session.client.sendSessionEvent({ type: 'ready' });
+                        }
                     }
                 } catch (e) {
+                    // AbortError is expected when user aborts - don't show error message
+                    if (e instanceof AbortError) {
+                        logger.debug('[remote]: AbortError caught (expected)');
+                        // Send ready event so frontend knows we can accept new messages
+                        session.client.sendSessionEvent({ type: 'ready' });
+                        continue;
+                    }
+                    const errorMessage = e instanceof Error ? e.message : String(e);
+                    const errorStack = e instanceof Error ? e.stack : undefined;
                     logger.debug('[remote]: launch error', e);
-                    if (!this.exitReason) {
-                        session.client.sendSessionEvent({ type: 'message', message: 'Process exited unexpectedly' });
+                    logger.debug('[remote]: error message:', errorMessage);
+                    if (errorStack) {
+                        logger.debug('[remote]: error stack:', errorStack);
+                    }
+                    if (!this.exitReason && !controller.signal.aborted) {
+                        session.client.sendSessionEvent({ type: 'message', message: `Process exited unexpectedly: ${errorMessage}` });
                         continue;
                     }
                 } finally {

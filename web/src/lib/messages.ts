@@ -20,15 +20,80 @@ function isOptimisticMessage(msg: DecryptedMessage): boolean {
     return Boolean(msg.localId && msg.id === msg.localId)
 }
 
+/**
+ * Extract the embedded timestamp from message content.
+ * CLI messages embed their creation timestamp in the message content.
+ * This is the actual time the message was created, unlike createdAt which
+ * is set when the message is stored in the hub database.
+ *
+ * Timestamp locations by content type:
+ * - output: { role: 'agent', content: { type: 'output', data: { timestamp: '...' } } }
+ * - codex:  { role: 'agent', content: { type: 'codex', timestamp: '...' } }
+ * - event:  { role: 'agent', content: { type: 'event', timestamp: '...' } }
+ */
+function getEmbeddedTimestamp(msg: DecryptedMessage): number | null {
+    const content = msg.content
+    if (!content || typeof content !== 'object') {
+        return null
+    }
+
+    const record = content as Record<string, unknown>
+
+    // Structure: { role: 'agent'|'user', content: { type: '...', ... } }
+    const innerContent = record.content
+    if (!innerContent || typeof innerContent !== 'object') {
+        return null
+    }
+
+    const inner = innerContent as Record<string, unknown>
+    const contentType = inner.type
+
+    let timestamp: unknown = null
+
+    if (contentType === 'output') {
+        // Output messages: timestamp is in data.timestamp
+        const data = inner.data
+        if (data && typeof data === 'object') {
+            timestamp = (data as Record<string, unknown>).timestamp
+        }
+    } else if (contentType === 'codex' || contentType === 'event') {
+        // Codex and event messages: timestamp is directly on inner content
+        timestamp = inner.timestamp
+    }
+
+    if (typeof timestamp !== 'string') {
+        return null
+    }
+
+    const parsed = Date.parse(timestamp)
+    if (Number.isNaN(parsed)) {
+        return null
+    }
+
+    return parsed
+}
+
 function compareMessages(a: DecryptedMessage, b: DecryptedMessage): number {
+    // Primary sort: use embedded timestamp if available (actual creation time)
+    const aEmbedded = getEmbeddedTimestamp(a)
+    const bEmbedded = getEmbeddedTimestamp(b)
+    if (aEmbedded !== null && bEmbedded !== null && aEmbedded !== bEmbedded) {
+        return aEmbedded - bEmbedded
+    }
+
+    // Secondary sort: by seq (storage order)
     const aSeq = typeof a.seq === 'number' ? a.seq : null
     const bSeq = typeof b.seq === 'number' ? b.seq : null
     if (aSeq !== null && bSeq !== null && aSeq !== bSeq) {
         return aSeq - bSeq
     }
+
+    // Tertiary sort: by createdAt (storage timestamp)
     if (a.createdAt !== b.createdAt) {
         return a.createdAt - b.createdAt
     }
+
+    // Final tiebreaker: by id
     return a.id.localeCompare(b.id)
 }
 

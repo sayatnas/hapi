@@ -32,7 +32,7 @@ interface PermissionResponse {
     receivedAt?: number;
 }
 
-const PLAN_EXIT_MODES: PermissionMode[] = ['default', 'acceptEdits', 'bypassPermissions'];
+const PLAN_EXIT_MODES: PermissionMode[] = ['default', 'acceptEdits', 'bypassPermissions', 'dangerouslySkipPermissions'];
 
 function isAskUserQuestionToolName(toolName: string): boolean {
     return toolName === 'AskUserQuestion' || toolName === 'ask_user_question';
@@ -289,7 +289,7 @@ export class PermissionHandler extends BasePermissionHandler<PermissionResponse,
         // Handle special cases
         //
 
-        if (!isQuestionTool && this.permissionMode === 'bypassPermissions') {
+        if (!isQuestionTool && (this.permissionMode === 'bypassPermissions' || this.permissionMode === 'dangerouslySkipPermissions')) {
             return { behavior: 'allow', updatedInput: input as Record<string, unknown> };
         }
 

@@ -307,7 +307,11 @@ export function query(config: {
     if (disallowedTools.length > 0) args.push('--disallowedTools', disallowedTools.join(','))
     if (additionalDirectories.length > 0) args.push('--add-dir', ...additionalDirectories)
     if (strictMcpConfig) args.push('--strict-mcp-config')
-    if (permissionMode) args.push('--permission-mode', permissionMode)
+    if (permissionMode === 'dangerouslySkipPermissions') {
+        args.push('--dangerously-skip-permissions')
+    } else if (permissionMode) {
+        args.push('--permission-mode', permissionMode)
+    }
 
     if (fallbackModel) {
         if (model && fallbackModel === model) {
@@ -377,13 +381,30 @@ export function query(config: {
     config.options?.abort?.addEventListener('abort', cleanup)
     process.on('exit', cleanup)
 
+    // Track if we've been aborted (before the close event fires)
+    let wasAborted = false
+    config.options?.abort?.addEventListener('abort', () => {
+        wasAborted = true
+        logDebug(`[SDK] Abort signal received, wasAborted set to true`)
+    })
+
     // Handle process exit
     const processExitPromise = new Promise<void>((resolve) => {
-        child.on('close', (code) => {
-            if (config.options?.abort?.aborted) {
+        child.on('close', (code, signal) => {
+            // Check abort state: either the signal is currently aborted, or it was aborted before
+            // (wasAborted handles race conditions where aborted might not be set yet when close fires)
+            const isAborted = config.options?.abort?.aborted || wasAborted
+            logDebug(`[SDK] Process close: code=${code}, signal=${signal}, abort.aborted=${config.options?.abort?.aborted}, wasAborted=${wasAborted}, isAborted=${isAborted}`)
+
+            if (isAborted) {
                 query.setError(new AbortError('Claude Code process aborted by user'))
-            }
-            if (code !== 0) {
+                resolve()
+            } else if (signal) {
+                // Process was killed by a signal (e.g., SIGTERM, SIGKILL)
+                // This can happen if the process was killed externally
+                query.setError(new AbortError(`Claude Code process killed by signal ${signal}`))
+                resolve()
+            } else if (code !== 0) {
                 query.setError(new Error(`Claude Code process exited with code ${code}`))
             } else {
                 resolve()

@@ -100,10 +100,13 @@ export function SessionChat(props: {
         // Detect transition: thinking → not thinking
         if (prevThinkingRef.current && !props.session.thinking) {
             voiceHooks.onReady(props.session.id)
+            // Auto-flush pending messages when agent stops thinking
+            // This ensures all messages from the completed response are shown
+            props.onFlushPending()
         }
 
         prevThinkingRef.current = props.session.thinking
-    }, [props.session.thinking, props.session.id])
+    }, [props.session.thinking, props.session.id, props.onFlushPending])
 
     // Report permission requests to voice assistant
     // Note: voiceHooks internally checks isVoiceSessionStarted() so we don't need to check voice.status here

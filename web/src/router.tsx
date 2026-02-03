@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
     Navigate,
@@ -16,6 +16,8 @@ import { SessionChat } from '@/components/SessionChat'
 import { SessionList } from '@/components/SessionList'
 import { NewSession } from '@/components/NewSession'
 import { LoadingState } from '@/components/LoadingState'
+import { RewindMenu } from '@/components/RewindMenu'
+import { FloatingOverlay } from '@/components/ChatInput/FloatingOverlay'
 import { useAppContext } from '@/lib/app-context'
 import { useAppGoBack } from '@/hooks/useAppGoBack'
 import { isTelegramApp } from '@/hooks/useTelegram'
@@ -25,11 +27,12 @@ import { useSession } from '@/hooks/queries/useSession'
 import { useSessions } from '@/hooks/queries/useSessions'
 import { useSlashCommands } from '@/hooks/queries/useSlashCommands'
 import { useSkills } from '@/hooks/queries/useSkills'
+import { useCheckpoints } from '@/hooks/queries/useCheckpoints'
 import { useSendMessage } from '@/hooks/mutations/useSendMessage'
 import { queryKeys } from '@/lib/query-keys'
 import { useToast } from '@/lib/toast-context'
 import { useTranslation } from '@/lib/use-translation'
-import { fetchLatestMessages, seedMessageWindowFromSession } from '@/lib/message-window-store'
+import { fetchLatestMessages, seedMessageWindowFromSession, clearMessageWindow } from '@/lib/message-window-store'
 import FilesPage from '@/routes/sessions/files'
 import FilePage from '@/routes/sessions/file'
 import TerminalPage from '@/routes/sessions/terminal'
@@ -185,6 +188,7 @@ function SessionPage() {
     const queryClient = useQueryClient()
     const { addToast } = useToast()
     const { sessionId } = useParams({ from: '/sessions/$sessionId' })
+    const [showRewindMenu, setShowRewindMenu] = useState(false)
     const {
         session,
         refetch: refetchSession,
@@ -202,11 +206,22 @@ function SessionPage() {
         flushPending,
         setAtBottom,
     } = useMessages(api, sessionId)
+
+    // Fetch checkpoints when rewind menu is shown
     const {
-        sendMessage,
+        data: checkpoints,
+        isLoading: checkpointsLoading,
+        error: checkpointsError,
+        refetch: refetchCheckpoints,
+    } = useCheckpoints(api, sessionId, showRewindMenu)
+
+    const {
+        sendMessage: originalSendMessage,
         retryMessage,
         isSending,
+        queuedMessages,
     } = useSendMessage(api, sessionId, {
+        isThinking: session?.thinking ?? false,
         resolveSessionId: async (currentSessionId) => {
             if (!api || !session || session.active) {
                 return currentSessionId
@@ -264,6 +279,57 @@ function SessionPage() {
         }
     })
 
+    // Intercept /rewind command to show rewind menu
+    // NOTE: This only rewinds conversation (messages), not code changes.
+    // Claude Code's git-based checkpointing is not exposed through the SDK.
+    const sendMessage = useCallback((text: string, attachments?: Parameters<typeof originalSendMessage>[1]) => {
+        const trimmed = text.trim()
+        if (trimmed === '/rewind' || trimmed.startsWith('/rewind ')) {
+            // Show rewind menu instead of sending message
+            setShowRewindMenu(true)
+            void refetchCheckpoints()
+            return
+        }
+        originalSendMessage(text, attachments)
+    }, [originalSendMessage, refetchCheckpoints])
+
+    // Handle rewind action
+    const handleRewind = useCallback(async (seq: number) => {
+        if (!api) return
+        try {
+            const result = await api.rewindSession(sessionId, seq)
+            if (!result.success) {
+                addToast({
+                    title: 'Rewind failed',
+                    body: result.error ?? 'Unknown error',
+                    sessionId,
+                    url: ''
+                })
+                return
+            }
+            // Clear message cache and refetch
+            clearMessageWindow(sessionId)
+            await queryClient.invalidateQueries({ queryKey: queryKeys.messages(sessionId) })
+            await refetchMessages()
+            await refetchSession()
+            setShowRewindMenu(false)
+            addToast({
+                title: 'Rewound successfully',
+                body: `Removed ${result.deletedCount} message(s). Note: Code changes are not reverted - use git to revert files.`,
+                sessionId,
+                url: ''
+            })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Rewind failed'
+            addToast({
+                title: 'Rewind failed',
+                body: message,
+                sessionId,
+                url: ''
+            })
+        }
+    }, [api, sessionId, queryClient, refetchMessages, refetchSession, addToast])
+
     // Get agent type from session metadata for slash commands
     const agentType = session?.metadata?.flavor ?? 'claude'
     const {
@@ -294,26 +360,50 @@ function SessionPage() {
     }
 
     return (
-        <SessionChat
-            api={api}
-            session={session}
-            messages={messages}
-            messagesWarning={messagesWarning}
-            hasMoreMessages={messagesHasMore}
-            isLoadingMessages={messagesLoading}
-            isLoadingMoreMessages={messagesLoadingMore}
-            isSending={isSending}
-            pendingCount={pendingCount}
-            messagesVersion={messagesVersion}
-            onBack={goBack}
-            onRefresh={refreshSelectedSession}
-            onLoadMore={loadMoreMessages}
-            onSend={sendMessage}
-            onFlushPending={flushPending}
-            onAtBottomChange={setAtBottom}
-            onRetryMessage={retryMessage}
-            autocompleteSuggestions={getAutocompleteSuggestions}
-        />
+        <>
+            <SessionChat
+                api={api}
+                session={session}
+                messages={messages}
+                messagesWarning={messagesWarning}
+                hasMoreMessages={messagesHasMore}
+                isLoadingMessages={messagesLoading}
+                isLoadingMoreMessages={messagesLoadingMore}
+                isSending={isSending}
+                pendingCount={pendingCount}
+                messagesVersion={messagesVersion}
+                onBack={goBack}
+                onRefresh={refreshSelectedSession}
+                onLoadMore={loadMoreMessages}
+                onSend={sendMessage}
+                onFlushPending={flushPending}
+                onAtBottomChange={setAtBottom}
+                onRetryMessage={retryMessage}
+                autocompleteSuggestions={getAutocompleteSuggestions}
+            />
+            {/* Rewind Menu Modal - Conversation only, not code changes */}
+            {showRewindMenu && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+                    onClick={() => setShowRewindMenu(false)}
+                >
+                    <div
+                        className="mx-4 w-full max-w-md"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <FloatingOverlay maxHeight={400}>
+                            <RewindMenu
+                                checkpoints={checkpoints ?? []}
+                                isLoading={checkpointsLoading}
+                                error={checkpointsError instanceof Error ? checkpointsError.message : checkpointsError ? String(checkpointsError) : null}
+                                onRewind={handleRewind}
+                                onClose={() => setShowRewindMenu(false)}
+                            />
+                        </FloatingOverlay>
+                    </div>
+                </div>
+            )}
+        </>
     )
 }
 
