@@ -16,6 +16,19 @@ export type RpcReadFileResponse = {
     error?: string
 }
 
+export type DirectoryEntry = {
+    name: string
+    type: 'file' | 'directory' | 'other'
+    size?: number
+    modified?: number
+}
+
+export type RpcListDirectoryResponse = {
+    success: boolean
+    entries?: DirectoryEntry[]
+    error?: string
+}
+
 export type RpcUploadFileResponse = {
     success: boolean
     path?: string
@@ -165,6 +178,10 @@ export class RpcGateway {
 
     async runRipgrep(sessionId: string, args: string[], cwd?: string): Promise<RpcCommandResponse> {
         return await this.sessionRpc(sessionId, 'ripgrep', { args, cwd }) as RpcCommandResponse
+    }
+
+    async listDirectory(sessionId: string, path: string): Promise<RpcListDirectoryResponse> {
+        return await this.sessionRpc(sessionId, 'listDirectory', { path }) as RpcListDirectoryResponse
     }
 
     async listSlashCommands(sessionId: string, agent: string): Promise<{

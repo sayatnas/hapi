@@ -149,4 +149,14 @@ export class MessageService {
     buildConversationSummary(sessionId: string, upToSeq: number): string {
         return this.store.messages.buildConversationSummary(sessionId, upToSeq)
     }
+
+    /**
+     * Build full conversation history for context injection.
+     * Used when Claude session is reset (e.g., after abort) to preserve full context.
+     * Also used for rewind past compaction boundaries to preserve full context.
+     * @param upToSeq Optional sequence number to limit history (for rewind feature)
+     */
+    buildFullConversationHistory(sessionId: string, upToSeq?: number): string {
+        return this.store.messages.buildFullConversationHistory(sessionId, upToSeq)
+    }
 }

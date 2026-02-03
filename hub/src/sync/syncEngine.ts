@@ -15,13 +15,13 @@ import type { SSEManager } from '../sse/sseManager'
 import { EventPublisher, type SyncEventListener } from './eventPublisher'
 import { MachineCache, type Machine } from './machineCache'
 import { MessageService } from './messageService'
-import { RpcGateway, type RpcCommandResponse, type RpcPathExistsResponse, type RpcReadFileResponse, type RpcUploadFileResponse, type RpcDeleteUploadResponse } from './rpcGateway'
+import { RpcGateway, type RpcCommandResponse, type RpcPathExistsResponse, type RpcReadFileResponse, type RpcUploadFileResponse, type RpcDeleteUploadResponse, type RpcListDirectoryResponse } from './rpcGateway'
 import { SessionCache } from './sessionCache'
 
 export type { Session, SyncEvent } from '@hapi/protocol/types'
 export type { Machine } from './machineCache'
 export type { SyncEventListener } from './eventPublisher'
-export type { RpcCommandResponse, RpcPathExistsResponse, RpcReadFileResponse, RpcUploadFileResponse, RpcDeleteUploadResponse } from './rpcGateway'
+export type { RpcCommandResponse, RpcPathExistsResponse, RpcReadFileResponse, RpcUploadFileResponse, RpcDeleteUploadResponse, RpcListDirectoryResponse } from './rpcGateway'
 
 export type ResumeSessionResult =
     | { type: 'success'; sessionId: string }
@@ -338,10 +338,6 @@ export class SyncEngine {
                     ? metadata.opencodeSessionId
                     : metadata.claudeSessionId
 
-        if (!resumeToken) {
-            return { type: 'error', message: 'Resume session ID unavailable', code: 'resume_unavailable' }
-        }
-
         const onlineMachines = this.machineCache.getOnlineMachinesByNamespace(namespace)
         if (onlineMachines.length === 0) {
             return { type: 'error', message: 'No machine online', code: 'no_machine_online' }
@@ -363,6 +359,8 @@ export class SyncEngine {
             return { type: 'error', message: 'No machine online', code: 'no_machine_online' }
         }
 
+        // If no resumeToken (e.g., after rewind), spawn a fresh session
+        // The CLI will pick up the existing HAPI session and its messages
         const spawnResult = await this.rpcGateway.spawnSession(
             targetMachine.id,
             metadata.path,
@@ -371,7 +369,7 @@ export class SyncEngine {
             undefined,
             undefined,
             undefined,
-            resumeToken
+            resumeToken // undefined after rewind - will spawn fresh
         )
 
         if (spawnResult.type !== 'success') {
@@ -439,6 +437,10 @@ export class SyncEngine {
         return await this.rpcGateway.runRipgrep(sessionId, args, cwd)
     }
 
+    async listDirectory(sessionId: string, path: string): Promise<RpcListDirectoryResponse> {
+        return await this.rpcGateway.listDirectory(sessionId, path)
+    }
+
     async listSlashCommands(sessionId: string, agent: string): Promise<{
         success: boolean
         commands?: Array<{ name: string; description?: string; source: 'builtin' | 'user' }>
@@ -492,10 +494,11 @@ export class SyncEngine {
             const compactionBoundaries = this.messageService.findCompactionBoundaries(sessionId)
             const crossedCompaction = compactionBoundaries.some(boundary => boundary > targetSeq)
 
-            // If crossing compaction, build context summary from messages before the rewind point
+            // If crossing compaction, build full conversation history from messages before the rewind point
+            // Using full history instead of summary to preserve complete context
             let contextSummary: string | undefined
             if (crossedCompaction) {
-                contextSummary = this.messageService.buildConversationSummary(sessionId, targetSeq)
+                contextSummary = this.messageService.buildFullConversationHistory(sessionId, targetSeq)
             }
 
             // Archive the session first (kills the running CLI process and marks inactive)

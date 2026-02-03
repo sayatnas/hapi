@@ -456,8 +456,8 @@ export class ApiSessionClient extends EventEmitter {
         this.socket.emit('session-end', { sid: this.sessionId, time: Date.now() })
     }
 
-    updateMetadata(handler: (metadata: Metadata) => Metadata): void {
-        this.metadataLock.inLock(async () => {
+    updateMetadata(handler: (metadata: Metadata) => Metadata): Promise<void> {
+        return this.metadataLock.inLock(async () => {
             await backoff(async () => {
                 const current = this.metadata ?? ({} as Metadata)
                 const updated = handler(current)
@@ -472,10 +472,19 @@ export class ApiSessionClient extends EventEmitter {
                     valueKey: 'metadata',
                     parseValue: (value) => {
                         const parsed = MetadataSchema.safeParse(value)
+                        if (!parsed.success) {
+                            logger.debug(`[API] MetadataSchema.safeParse failed:`, parsed.error)
+                            logger.debug(`[API] Raw value keys:`, value && typeof value === 'object' ? Object.keys(value as object) : 'not object')
+                            // Check if rewindContextSummary is in the raw value
+                            if (value && typeof value === 'object' && 'rewindContextSummary' in (value as object)) {
+                                logger.debug(`[API] rewindContextSummary IS in raw value, length:`, ((value as Record<string, unknown>).rewindContextSummary as string)?.length)
+                            }
+                        }
                         return parsed.success ? parsed.data : null
                     },
                     applyValue: (value) => {
                         this.metadata = value
+                        logger.debug(`[API] Applied metadata, rewindContextSummary length:`, (value as Record<string, unknown> | null)?.rewindContextSummary ? ((value as Record<string, unknown>).rewindContextSummary as string).length : 0)
                     },
                     applyVersion: (version) => {
                         this.metadataVersion = version
@@ -638,6 +647,21 @@ export class ApiSessionClient extends EventEmitter {
         this.updateMetadata((metadata) => {
             const updated = { ...metadata } as Record<string, unknown>
             delete updated.rewindContextSummary
+            return updated as typeof metadata
+        })
+    }
+
+    /**
+     * Request context recovery from the Hub.
+     * Sets needsContextRecovery flag in metadata, which triggers the Hub to build
+     * full conversation history and store it as rewindContextSummary.
+     * This preserves conversation context when Claude session is reset (e.g., after abort).
+     * @returns Promise that resolves when the context recovery is complete and metadata is updated
+     */
+    requestContextRecovery(): Promise<void> {
+        return this.updateMetadata((metadata) => {
+            const updated = { ...metadata } as Record<string, unknown>
+            updated.needsContextRecovery = true
             return updated as typeof metadata
         })
     }

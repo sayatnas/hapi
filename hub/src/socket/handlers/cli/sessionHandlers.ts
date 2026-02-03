@@ -133,11 +133,35 @@ export function registerSessionHandlers(socket: CliSocketWithData, deps: Session
             return
         }
 
-        const { sid, metadata, expectedVersion } = parsed.data
+        const { sid, expectedVersion } = parsed.data
+        let { metadata } = parsed.data
         const sessionAccess = resolveSessionAccess(sid)
         if (!sessionAccess.ok) {
             cb({ result: 'error', reason: sessionAccess.reason })
             return
+        }
+
+        // Check if CLI is requesting context recovery (after session ID cleared due to abort)
+        // If so, build full conversation history and inject it as rewindContextSummary
+        const metadataObj = metadata as Record<string, unknown> | null
+        if (metadataObj?.needsContextRecovery === true) {
+            console.log(`[sessionHandlers] Context recovery requested for session ${sid}`)
+            const conversationHistory = store.messages.buildFullConversationHistory(sid)
+            console.log(`[sessionHandlers] Built conversation history: length=${conversationHistory?.length ?? 0}`)
+            if (conversationHistory) {
+                metadata = {
+                    ...metadataObj,
+                    rewindContextSummary: conversationHistory,
+                    needsContextRecovery: undefined // Clear the flag
+                }
+                console.log(`[sessionHandlers] Set rewindContextSummary in metadata`)
+            } else {
+                metadata = {
+                    ...metadataObj,
+                    needsContextRecovery: undefined // Clear the flag even if no history
+                }
+                console.log(`[sessionHandlers] No conversation history found`)
+            }
         }
 
         const result = store.sessions.updateSessionMetadata(

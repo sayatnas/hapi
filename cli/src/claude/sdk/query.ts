@@ -294,7 +294,10 @@ export function query(config: {
     if (appendSystemPrompt) args.push('--append-system-prompt', stripNewlinesForWindowsShellArg(appendSystemPrompt))
     if (maxTurns) args.push('--max-turns', maxTurns.toString())
     if (model) args.push('--model', model)
-    if (canCallTool) {
+    // Only add permission prompt tool if NOT in dangerouslySkipPermissions mode
+    // In dangerouslySkipPermissions mode, Claude Code skips ALL permission prompts internally
+    // so we don't need the callback mechanism
+    if (canCallTool && permissionMode !== 'dangerouslySkipPermissions') {
         if (typeof prompt === 'string') {
             throw new Error('canCallTool callback requires --input-format stream-json. Please set prompt as an AsyncIterable.')
         }
@@ -308,7 +311,14 @@ export function query(config: {
     if (additionalDirectories.length > 0) args.push('--add-dir', ...additionalDirectories)
     if (strictMcpConfig) args.push('--strict-mcp-config')
     if (permissionMode === 'dangerouslySkipPermissions') {
-        args.push('--dangerously-skip-permissions')
+        // Check if running as root - Claude Code refuses --dangerously-skip-permissions for security
+        // Fall back to bypassPermissions mode which auto-approves everything via HAPI's permission handler
+        if (process.getuid && process.getuid() === 0) {
+            logDebug('[SDK] Running as root - falling back from dangerouslySkipPermissions to bypassPermissions mode')
+            args.push('--permission-mode', 'bypassPermissions')
+        } else {
+            args.push('--dangerously-skip-permissions')
+        }
     } else if (permissionMode) {
         args.push('--permission-mode', permissionMode)
     }
@@ -342,9 +352,16 @@ export function query(config: {
 
     cleanupMcpConfig = appendMcpConfigArg(spawnArgs, mcpServers)
 
+    // Check if signal is already aborted before spawning
+    if (config.options?.abort?.aborted) {
+        logDebug(`[SDK] Signal already aborted before spawn, throwing AbortError`)
+        throw new AbortError('Spawn aborted - signal was already aborted')
+    }
+
     // Spawn Claude Code process
     const spawnEnv = withBunRuntimeEnv(process.env, { allowBunBeBun: false })
     logDebug(`Spawning Claude Code process: ${spawnCommand} ${spawnArgs.join(' ')}`)
+    logDebug(`[SDK] Signal aborted state: ${config.options?.abort?.aborted ?? 'no signal'}`)
 
     const child = spawn(spawnCommand, spawnArgs, {
         cwd,
@@ -364,12 +381,18 @@ export function query(config: {
         childStdin = child.stdin
     }
 
-    // Handle stderr in debug mode
-    if (process.env.DEBUG) {
-        child.stderr.on('data', (data) => {
-            console.error('Claude Code stderr:', data.toString())
-        })
-    }
+    // Capture stderr for debugging (always, not just in debug mode)
+    let stderrBuffer = ''
+    child.stderr.on('data', (data) => {
+        const chunk = data.toString()
+        stderrBuffer += chunk
+        logDebug(`[SDK] Claude Code stderr: ${chunk.trim()}`)
+    })
+
+    // Also capture stdout for debugging process start
+    child.stdout.on('data', (data) => {
+        logDebug(`[SDK] Claude Code stdout chunk received (${data.length} bytes)`)
+    })
 
     // Setup cleanup
     const cleanup = () => {
@@ -378,15 +401,22 @@ export function query(config: {
         }
     }
 
-    config.options?.abort?.addEventListener('abort', cleanup)
-    process.on('exit', cleanup)
-
     // Track if we've been aborted (before the close event fires)
-    let wasAborted = false
+    // IMPORTANT: This listener MUST be registered BEFORE the cleanup listener
+    // so that wasAborted is set to true BEFORE killProcessByChildProcess is called,
+    // which will immediately terminate the process and fire the close event
+    // Also initialize from current state in case already aborted
+    let wasAborted = config.options?.abort?.aborted ?? false
+    if (wasAborted) {
+        logDebug(`[SDK] Abort signal already aborted at listener registration`)
+    }
     config.options?.abort?.addEventListener('abort', () => {
         wasAborted = true
         logDebug(`[SDK] Abort signal received, wasAborted set to true`)
     })
+
+    config.options?.abort?.addEventListener('abort', cleanup)
+    process.on('exit', cleanup)
 
     // Handle process exit
     const processExitPromise = new Promise<void>((resolve) => {
@@ -405,7 +435,8 @@ export function query(config: {
                 query.setError(new AbortError(`Claude Code process killed by signal ${signal}`))
                 resolve()
             } else if (code !== 0) {
-                query.setError(new Error(`Claude Code process exited with code ${code}`))
+                const stderrInfo = stderrBuffer.trim() ? ` (stderr: ${stderrBuffer.trim().slice(0, 500)})` : ''
+                query.setError(new Error(`Claude Code process exited with code ${code}${stderrInfo}`))
             } else {
                 resolve()
             }

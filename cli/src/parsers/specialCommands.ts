@@ -17,7 +17,7 @@ export interface RewindCommandResult {
 }
 
 export interface SpecialCommandResult {
-    type: 'compact' | 'clear' | 'rewind' | null;
+    type: 'compact' | 'clear' | 'rewind' | 'recover' | null;
     originalMessage?: string;
     rewindOptions?: { targetSeq?: number };
 }
@@ -59,6 +59,17 @@ export function parseClear(message: string): ClearCommandResult {
     return {
         isClear: trimmed === '/clear'
     };
+}
+
+/**
+ * Parse /recover command
+ * Matches exactly "/recover"
+ * Forces context recovery - injects full conversation history into Claude's context
+ * Use this when Claude has lost context (e.g., after abort/crash)
+ */
+export function parseRecover(message: string): { isRecover: boolean } {
+    const trimmed = message.trim();
+    return { isRecover: trimmed === '/recover' };
 }
 
 /**
@@ -106,6 +117,13 @@ export function parseSpecialCommand(message: string): SpecialCommandResult {
     if (clearResult.isClear) {
         return {
             type: 'clear'
+        };
+    }
+
+    const recoverResult = parseRecover(message);
+    if (recoverResult.isRecover) {
+        return {
+            type: 'recover'
         };
     }
 

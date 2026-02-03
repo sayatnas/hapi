@@ -30,6 +30,7 @@ const BUILTIN_COMMANDS: Record<string, SlashCommand[]> = {
         { name: 'context', description: 'Show context information', source: 'builtin' },
         { name: 'cost', description: 'Show session cost', source: 'builtin' },
         { name: 'plan', description: 'Toggle plan mode', source: 'builtin' },
+        { name: 'recover', description: 'Recover conversation context after session reset', source: 'builtin' },
         { name: 'rewind', description: 'Rewind conversation to a previous checkpoint (conversation only, not code)', source: 'builtin' },
     ],
     codex: [

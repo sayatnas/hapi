@@ -105,6 +105,19 @@ export type FileReadResponse = {
     error?: string
 }
 
+export type DirectoryEntry = {
+    name: string
+    type: 'file' | 'directory' | 'other'
+    size?: number
+    modified?: number
+}
+
+export type DirectoryListingResponse = {
+    success: boolean
+    entries?: DirectoryEntry[]
+    error?: string
+}
+
 export type UploadFileResponse = {
     success: boolean
     path?: string

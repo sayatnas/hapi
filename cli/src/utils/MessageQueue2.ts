@@ -243,24 +243,37 @@ export class MessageQueue2<T> {
      * Returns { message: string, mode: T } or null if aborted/closed
      */
     async waitForMessagesAndGetAsString(abortSignal?: AbortSignal): Promise<{ message: string, mode: T, isolate: boolean, hash: string } | null> {
-        // If we have messages, return them immediately
-        if (this.queue.length > 0) {
+        // Loop to handle the case where messages are consumed by another consumer
+        // (e.g., real-time steering injection) while we're waiting
+        while (true) {
+            // If we have messages, return them immediately
+            if (this.queue.length > 0) {
+                return this.collectBatch();
+            }
+
+            // If closed or already aborted, return null
+            if (this.closed || abortSignal?.aborted) {
+                return null;
+            }
+
+            // Wait for messages to arrive
+            const hasMessages = await this.waitForMessages(abortSignal);
+
+            if (!hasMessages) {
+                // Aborted or closed - return null
+                return null;
+            }
+
+            // hasMessages is true, but queue might be empty if another consumer
+            // (e.g., injectQueuedMessages for real-time steering) already processed them.
+            // In that case, loop back and wait again.
+            if (this.queue.length === 0) {
+                logger.debug('[MessageQueue2] waitForMessagesAndGetAsString: woke up but queue is empty (consumed by another handler), waiting again');
+                continue;
+            }
+
             return this.collectBatch();
         }
-
-        // If closed or already aborted, return null
-        if (this.closed || abortSignal?.aborted) {
-            return null;
-        }
-
-        // Wait for messages to arrive
-        const hasMessages = await this.waitForMessages(abortSignal);
-
-        if (!hasMessages) {
-            return null;
-        }
-
-        return this.collectBatch();
     }
 
     /**

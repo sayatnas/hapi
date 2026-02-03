@@ -134,20 +134,44 @@ export async function claudeRemote(opts: {
         return;
     }
 
+    // Handle /recover command
+    // Forces context recovery - requests full conversation history from Hub
+    if (specialCommand.type === 'recover') {
+        logger.debug('[claudeRemote] /recover command detected');
+        if (opts.onCompletionEvent) {
+            opts.onCompletionEvent('__recover_context__');
+        }
+        if (opts.onSessionReset) {
+            opts.onSessionReset();
+        }
+        return;
+    }
+
     // Build append system prompt with optional rewind context
     let baseAppendPrompt = initial.mode.appendSystemPrompt
         ? initial.mode.appendSystemPrompt + '\n\n' + systemPrompt
         : systemPrompt;
 
     // If we have a rewind context summary, prepend it to help Claude understand the conversation history
+    // Note: We track whether we successfully used the context so we can clear it only on success
+    let usedRewindContext = false;
+    console.log(`[claudeRemote] opts.rewindContextSummary: ${opts.rewindContextSummary ? `${opts.rewindContextSummary.length} chars` : 'undefined'}`);
     if (opts.rewindContextSummary) {
-        logger.debug('[claudeRemote] Injecting rewind context summary into system prompt');
-        baseAppendPrompt = opts.rewindContextSummary + '\n\n' + baseAppendPrompt;
+        // Log the context size for debugging
+        const contextLength = opts.rewindContextSummary.length;
+        console.log(`[claudeRemote] Injecting rewind context summary into system prompt (length: ${contextLength})`);
 
-        // Clear the context summary from metadata now that we've used it
-        if (opts.onRewindContextConsumed) {
-            opts.onRewindContextConsumed();
+        // Limit context size to prevent potential issues with very large prompts
+        // 100KB should be plenty while staying safe
+        const MAX_CONTEXT_SIZE = 100 * 1024;
+        if (contextLength > MAX_CONTEXT_SIZE) {
+            logger.debug(`[claudeRemote] Context too large (${contextLength}), truncating to ${MAX_CONTEXT_SIZE}`);
+            const truncated = opts.rewindContextSummary.slice(0, MAX_CONTEXT_SIZE) + '\n\n[Context truncated due to size...]';
+            baseAppendPrompt = truncated + '\n\n' + baseAppendPrompt;
+        } else {
+            baseAppendPrompt = opts.rewindContextSummary + '\n\n' + baseAppendPrompt;
         }
+        usedRewindContext = true;
     }
 
     // Prepare SDK options
@@ -240,6 +264,17 @@ export async function claudeRemote(opts: {
         }
     };
 
+    // Start the loop
+    const response = query({
+        prompt: messages,
+        options: sdkOptions,
+    });
+
+    // Set thinking to true BEFORE registering the message callback
+    // This ensures that if messages arrive immediately after registration,
+    // they will be injected (since injectQueuedMessages checks thinking state)
+    updateThinking(true);
+
     // Set up callback to be notified when new messages arrive
     // The callback triggers injection of queued messages
     if (opts.messageQueue) {
@@ -247,15 +282,11 @@ export async function claudeRemote(opts: {
             // Inject any queued messages immediately
             injectQueuedMessages();
         });
+
+        // Inject any messages that were already queued before we set up the callback
+        // (e.g., user sent message while claudeRemote was starting up)
+        injectQueuedMessages();
     }
-
-    // Start the loop
-    const response = query({
-        prompt: messages,
-        options: sdkOptions,
-    });
-
-    updateThinking(true);
     try {
         logger.debug(`[claudeRemote] Starting to iterate over response`);
 
@@ -269,6 +300,14 @@ export async function claudeRemote(opts: {
             if (message.type === 'system' && message.subtype === 'init') {
                 // Start thinking when session initializes
                 updateThinking(true);
+
+                // Session successfully started - clear the rewind context now that it's been used
+                // We wait until init to ensure the spawn actually succeeded
+                if (usedRewindContext && opts.onRewindContextConsumed) {
+                    logger.debug('[claudeRemote] Session init successful, clearing rewind context');
+                    opts.onRewindContextConsumed();
+                    usedRewindContext = false;  // Don't clear again
+                }
 
                 const systemInit = message as SDKSystemMessage;
 

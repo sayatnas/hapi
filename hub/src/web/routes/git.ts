@@ -13,6 +13,10 @@ const filePathSchema = z.object({
     path: z.string().min(1)
 })
 
+const directoryPathSchema = z.object({
+    path: z.string().optional()
+})
+
 function parseBooleanParam(value: string | undefined): boolean | undefined {
     if (value === 'true') return true
     if (value === 'false') return false
@@ -178,6 +182,35 @@ export function createGitRoutes(getSyncEngine: () => SyncEngine | null): Hono<We
             })
 
         return c.json({ success: true, files })
+    })
+
+    app.get('/sessions/:id/directory', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireSessionFromParam(c, engine)
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const sessionPath = sessionResult.session.metadata?.path
+        if (!sessionPath) {
+            return c.json({ success: false, error: 'Session path not available' })
+        }
+
+        const parsed = directoryPathSchema.safeParse(c.req.query())
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid query' }, 400)
+        }
+
+        // If no path provided, use session root; otherwise resolve relative to session path
+        const requestedPath = parsed.data.path?.trim()
+        const targetPath = requestedPath ? `${sessionPath}/${requestedPath}` : sessionPath
+
+        const result = await runRpc(() => engine.listDirectory(sessionResult.sessionId, targetPath))
+        return c.json(result)
     })
 
     return app

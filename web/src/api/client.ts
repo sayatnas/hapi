@@ -2,6 +2,7 @@ import type {
     AttachmentMetadata,
     AuthResponse,
     DeleteUploadResponse,
+    DirectoryListingResponse,
     FileReadResponse,
     FileSearchResponse,
     GitCommandResponse,
@@ -237,6 +238,15 @@ export class ApiClient {
         const params = new URLSearchParams()
         params.set('path', path)
         return await this.request<FileReadResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/file?${params.toString()}`)
+    }
+
+    async listDirectory(sessionId: string, path?: string): Promise<DirectoryListingResponse> {
+        const params = new URLSearchParams()
+        if (path) {
+            params.set('path', path)
+        }
+        const qs = params.toString()
+        return await this.request<DirectoryListingResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/directory${qs ? `?${qs}` : ''}`)
     }
 
     async uploadFile(sessionId: string, filename: string, content: string, mimeType: string): Promise<UploadFileResponse> {

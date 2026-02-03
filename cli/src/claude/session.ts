@@ -141,4 +141,15 @@ export class Session extends AgentSessionBase<EnhancedMode> {
     clearRewindContextSummary = (): void => {
         this.client.clearRewindContextSummary();
     };
+
+    /**
+     * Request context recovery from the Hub.
+     * Called when Claude session ID is cleared (e.g., after abort) to preserve conversation history.
+     * The Hub will build full conversation history and store it in metadata as rewindContextSummary.
+     * @returns Promise that resolves when context recovery is complete
+     */
+    requestContextRecovery = (): Promise<void> => {
+        logger.debug('[Session] Requesting context recovery from Hub');
+        return this.client.requestContextRecovery();
+    };
 }

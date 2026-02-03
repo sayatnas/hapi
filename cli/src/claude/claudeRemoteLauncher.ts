@@ -294,6 +294,20 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                 this.abortFuture = new Future<void>();
                 let modeHash: string | null = null;
                 let mode: EnhancedMode | null = null;
+
+                // If starting fresh (no Claude session ID) and no rewind context available,
+                // request context recovery to preserve conversation history
+                let rewindContext = session.getRewindContextSummary();
+                if (!session.sessionId && !rewindContext) {
+                    logger.debug('[remote]: No session ID and no rewind context - requesting context recovery');
+                    await session.requestContextRecovery();
+                    rewindContext = session.getRewindContextSummary();
+                    logger.debug(`[remote]: After context recovery - hasRewindContext=${!!rewindContext}, length=${rewindContext?.length ?? 0}`);
+                }
+
+                // Log key state for debugging
+                logger.debug(`[remote]: About to call claudeRemote - sessionId=${session.sessionId}, hasRewindContext=${!!rewindContext}, rewindContextLength=${rewindContext?.length ?? 0}`);
+
                 try {
                     await claudeRemote({
                         sessionId: session.sessionId,
@@ -339,8 +353,36 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                         claudeEnvVars: session.claudeEnvVars,
                         claudeArgs: session.claudeArgs,
                         onMessage,
-                        onCompletionEvent: (message: string) => {
+                        onCompletionEvent: async (message: string) => {
                             logger.debug(`[remote]: Completion event: ${message}`);
+
+                            // Handle /recover command - force context recovery
+                            if (message === '__recover_context__') {
+                                console.log('[RECOVER]: Context recovery requested via /recover command');
+                                session.client.sendSessionEvent({ type: 'message', message: 'Recovering conversation context...' });
+
+                                // Clear session ID first
+                                session.clearSessionId();
+                                console.log('[RECOVER]: Cleared session ID');
+
+                                // Request context recovery
+                                await session.requestContextRecovery();
+                                console.log('[RECOVER]: requestContextRecovery() completed');
+
+                                const context = session.getRewindContextSummary();
+                                console.log(`[RECOVER]: getRewindContextSummary() returned: ${context ? `${context.length} chars` : 'undefined'}`);
+
+                                if (context) {
+                                    console.log(`[RECOVER]: First 200 chars of context: ${context.slice(0, 200)}`);
+                                    session.client.sendSessionEvent({ type: 'message', message: `Context recovered (${context.length} characters). Send a message to continue.` });
+                                } else {
+                                    console.log('[RECOVER]: No context found to recover');
+                                    session.client.sendSessionEvent({ type: 'message', message: 'No conversation history found to recover.' });
+                                }
+                                session.client.sendSessionEvent({ type: 'ready' });
+                                return;
+                            }
+
                             session.client.sendSessionEvent({ type: 'message', message });
                         },
                         onSessionReset: () => {
@@ -354,8 +396,13 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                         },
                         signal: controller.signal,
                         // Pass rewind context summary for cross-compaction rewind support
-                        rewindContextSummary: session.getRewindContextSummary(),
+                        rewindContextSummary: (() => {
+                            const ctx = session.getRewindContextSummary();
+                            console.log(`[LAUNCHER]: Passing rewindContextSummary to claudeRemote: ${ctx ? `${ctx.length} chars` : 'undefined'}`);
+                            return ctx;
+                        })(),
                         onRewindContextConsumed: () => {
+                            console.log('[LAUNCHER]: onRewindContextConsumed called - clearing context');
                             session.clearRewindContextSummary();
                         },
                         // Pass message queue for real-time steering (mid-turn message injection)
@@ -366,6 +413,13 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
 
                     if (!this.exitReason && controller.signal.aborted) {
                         session.client.sendSessionEvent({ type: 'message', message: 'Aborted by user' });
+                        // Clear the Claude session ID so next request starts fresh
+                        // This prevents issues with resuming a session that was aborted mid-way
+                        // (especially important for YOLO mode which doesn't handle corrupt sessions well)
+                        session.clearSessionId();
+                        // Request Hub to build full conversation history for context injection
+                        // Wait for completion to ensure context is available for next spawn
+                        await session.requestContextRecovery();
                         // Send ready event so frontend knows we can accept new messages
                         // Note: onThinkingChange(false) was already called in claudeRemote's finally block
                         if (!pending && session.queue.size() === 0) {
@@ -376,8 +430,28 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                     // AbortError is expected when user aborts - don't show error message
                     if (e instanceof AbortError) {
                         logger.debug('[remote]: AbortError caught (expected)');
+                        // Clear the Claude session ID so next request starts fresh
+                        session.clearSessionId();
+                        // Request Hub to build full conversation history for context injection
+                        // Wait for completion to ensure context is available for next spawn
+                        await session.requestContextRecovery();
                         // Send ready event so frontend knows we can accept new messages
                         session.client.sendSessionEvent({ type: 'ready' });
+                        continue;
+                    }
+
+                    // If we get a non-AbortError after abort (e.g., process exit code 1),
+                    // clear the session ID and request context recovery, then retry silently
+                    if (controller.signal.aborted) {
+                        logger.debug('[remote]: Non-AbortError after abort, clearing session ID and requesting context recovery');
+                        session.clearSessionId();
+                        // Request Hub to build full conversation history for context injection
+                        // Wait for completion to ensure context is available for next spawn
+                        await session.requestContextRecovery();
+                        // Send ready event so frontend knows we can accept new messages
+                        if (!pending && session.queue.size() === 0) {
+                            session.client.sendSessionEvent({ type: 'ready' });
+                        }
                         continue;
                     }
                     const errorMessage = e instanceof Error ? e.message : String(e);
@@ -389,6 +463,9 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                     }
                     if (!this.exitReason && !controller.signal.aborted) {
                         session.client.sendSessionEvent({ type: 'message', message: `Process exited unexpectedly: ${errorMessage}` });
+                        // Clear session ID on error so next spawn starts fresh
+                        // The context recovery will happen automatically at the start of the next iteration
+                        session.clearSessionId();
                         continue;
                     }
                 } finally {

@@ -459,6 +459,147 @@ export function buildConversationSummary(
     return lines.join('\n')
 }
 
+/**
+ * Build the full conversation history for context injection.
+ * Unlike buildConversationSummary which truncates, this preserves full messages
+ * so Claude has complete context when resuming after a session reset.
+ *
+ * @param upToSeq - Optional: only include messages up to this sequence number (for rewind)
+ * @returns A formatted string suitable for injection into the system prompt.
+ */
+export function buildFullConversationHistory(
+    db: Database,
+    sessionId: string,
+    upToSeq?: number
+): string {
+    const query = upToSeq !== undefined
+        ? 'SELECT seq, content FROM messages WHERE session_id = ? AND seq <= ? ORDER BY seq ASC'
+        : 'SELECT seq, content FROM messages WHERE session_id = ? ORDER BY seq ASC'
+
+    const rows = upToSeq !== undefined
+        ? db.prepare(query).all(sessionId, upToSeq) as DbMessageRow[]
+        : db.prepare(query).all(sessionId) as DbMessageRow[]
+
+    console.log(`[buildFullConversationHistory] Session ${sessionId}: found ${rows.length} messages`)
+
+    const conversations: Array<{ role: 'user' | 'assistant'; text: string }> = []
+
+    for (const row of rows) {
+        const content = safeJsonParse(row.content)
+        if (!content || typeof content !== 'object') continue
+
+        const msgContent = content as Record<string, unknown>
+
+        // Format 1: Direct web UI message
+        if (msgContent.role === 'user' && msgContent.content && typeof msgContent.content === 'object') {
+            const contentObj = msgContent.content as Record<string, unknown>
+            if (contentObj.type === 'text' && typeof contentObj.text === 'string') {
+                const text = contentObj.text.trim()
+                if (text.length > 0) {
+                    conversations.push({ role: 'user', text })
+                }
+            }
+            continue
+        }
+
+        // Format 2: Wrapped SDK messages
+        if (msgContent.role === 'agent' && msgContent.content && typeof msgContent.content === 'object') {
+            const wrapper = msgContent.content as Record<string, unknown>
+            if (wrapper.type === 'output' && wrapper.data && typeof wrapper.data === 'object') {
+                const data = wrapper.data as Record<string, unknown>
+
+                // Skip sidechain messages
+                if (data.isSidechain === true) continue
+
+                // User messages
+                if (data.type === 'user' && data.message && typeof data.message === 'object') {
+                    const message = data.message as Record<string, unknown>
+                    if (message.role !== 'user') continue
+
+                    let text: string | null = null
+                    if (typeof message.content === 'string') {
+                        text = message.content
+                    } else if (Array.isArray(message.content)) {
+                        // Skip if only tool results
+                        const hasOnlyToolResults = message.content.every(
+                            (item: unknown) =>
+                                item && typeof item === 'object' &&
+                                ((item as Record<string, unknown>).type === 'tool_result' ||
+                                 (item as Record<string, unknown>).tool_use_id)
+                        )
+                        if (hasOnlyToolResults) continue
+
+                        const textContent = message.content.find(
+                            (item: unknown) =>
+                                item && typeof item === 'object' &&
+                                (item as Record<string, unknown>).type === 'text'
+                        ) as Record<string, unknown> | undefined
+
+                        if (textContent && typeof textContent.text === 'string') {
+                            text = textContent.text
+                        }
+                    }
+
+                    if (text && text.trim().length > 0) {
+                        // Skip system/automated messages
+                        if (text.startsWith('<local-command-caveat>')) continue
+                        if (text.startsWith('This session is being continued')) continue
+
+                        conversations.push({ role: 'user', text: text.trim() })
+                    }
+                }
+
+                // Assistant messages (text only, skip tool calls)
+                if (data.type === 'assistant' && data.message && typeof data.message === 'object') {
+                    const message = data.message as Record<string, unknown>
+                    if (message.role !== 'assistant') continue
+
+                    if (Array.isArray(message.content)) {
+                        for (const item of message.content) {
+                            if (item && typeof item === 'object') {
+                                const contentItem = item as Record<string, unknown>
+                                if (contentItem.type === 'text' && typeof contentItem.text === 'string') {
+                                    const text = contentItem.text.trim()
+                                    if (text.length > 0) {
+                                        conversations.push({ role: 'assistant', text })
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    console.log(`[buildFullConversationHistory] Extracted ${conversations.length} conversation entries`)
+
+    // Build formatted full history
+    if (conversations.length === 0) {
+        return ''
+    }
+
+    const lines: string[] = [
+        '## Previous Conversation History',
+        '',
+        'This session was interrupted and is being continued. Below is the complete conversation history from before the interruption. Use this context to continue helping the user seamlessly:',
+        ''
+    ]
+
+    for (const conv of conversations) {
+        const roleLabel = conv.role === 'user' ? 'User' : 'Assistant'
+        lines.push(`**${roleLabel}:**`)
+        lines.push(conv.text)
+        lines.push('')
+    }
+
+    lines.push('---')
+    lines.push('Continue the conversation from where it left off.')
+    lines.push('')
+
+    return lines.join('\n')
+}
+
 export function mergeSessionMessages(
     db: Database,
     fromSessionId: string,
