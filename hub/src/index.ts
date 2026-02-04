@@ -179,7 +179,18 @@ async function main() {
         onWebappEvent: (event: SyncEvent) => syncEngine?.handleRealtimeEvent(event),
         onSessionAlive: (payload) => syncEngine?.handleSessionAlive(payload),
         onSessionEnd: (payload) => syncEngine?.handleSessionEnd(payload),
-        onMachineAlive: (payload) => syncEngine?.handleMachineAlive(payload)
+        onMachineAlive: (payload) => syncEngine?.handleMachineAlive(payload),
+        // Auto-approve permission requests when session is in dangerouslySkipPermissions (YOLO) mode
+        onPermissionRequestReceived: (sessionId, requestId) => {
+            if (!syncEngine) return
+            const session = syncEngine.getSession(sessionId)
+            if (!session) return
+            // Auto-approve if in dangerous YOLO mode
+            if (session.permissionMode === 'dangerouslySkipPermissions') {
+                console.log(`[YOLO] Auto-approving permission request ${requestId} for session ${sessionId}`)
+                void syncEngine.approvePermission(sessionId, requestId)
+            }
+        }
     })
 
     syncEngine = new SyncEngine(store, socketServer.io, socketServer.rpcRegistry, sseManager)

@@ -54,10 +54,15 @@ export type SessionHandlersDeps = {
     onSessionAlive?: (payload: SessionAlivePayload) => void
     onSessionEnd?: (payload: SessionEndPayload) => void
     onWebappEvent?: (event: SyncEvent) => void
+    /**
+     * Called when a new permission request is detected in agentState.requests.
+     * Used for auto-approval in YOLO mode.
+     */
+    onPermissionRequestReceived?: (sessionId: string, requestId: string) => void
 }
 
 export function registerSessionHandlers(socket: CliSocketWithData, deps: SessionHandlersDeps): void {
-    const { store, resolveSessionAccess, emitAccessError, onSessionAlive, onSessionEnd, onWebappEvent } = deps
+    const { store, resolveSessionAccess, emitAccessError, onSessionAlive, onSessionEnd, onWebappEvent, onPermissionRequestReceived } = deps
 
     socket.on('message', (data: unknown) => {
         const parsed = messageSchema.safeParse(data)
@@ -239,6 +244,16 @@ export function registerSessionHandlers(socket: CliSocketWithData, deps: Session
             }
             socket.to(`session:${sid}`).emit('update', update)
             onWebappEvent?.({ type: 'session-updated', sessionId: sid, data: { sid } })
+
+            // Check for new permission requests and notify for auto-approval in YOLO mode
+            if (onPermissionRequestReceived && agentState && typeof agentState === 'object') {
+                const stateObj = agentState as { requests?: Record<string, unknown> }
+                if (stateObj.requests && typeof stateObj.requests === 'object') {
+                    for (const requestId of Object.keys(stateObj.requests)) {
+                        onPermissionRequestReceived(sid, requestId)
+                    }
+                }
+            }
         }
     }
 

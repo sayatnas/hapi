@@ -166,6 +166,7 @@ export class ApiSessionClient extends EventEmitter {
                 if (!data.body) return
 
                 if (data.body.t === 'new-message') {
+                    logger.debug(`[API] socket.on('update'): Received new-message with seq=${data.body.message?.seq}`)
                     this.handleIncomingMessage(data.body.message)
                     return
                 }
@@ -215,27 +216,35 @@ export class ApiSessionClient extends EventEmitter {
 
     private enqueueUserMessage(message: UserMessage): void {
         if (this.pendingMessageCallback) {
+            logger.debug(`[API] enqueueUserMessage: Calling pendingMessageCallback with message: "${message.content.text?.substring(0, 50)}..."`)
             this.pendingMessageCallback(message)
         } else {
+            logger.debug(`[API] enqueueUserMessage: No callback yet, pushing to pendingMessages queue (now ${this.pendingMessages.length + 1} messages)`)
             this.pendingMessages.push(message)
         }
     }
 
     private handleIncomingMessage(message: { seq?: number; content: unknown }): void {
         const seq = typeof message.seq === 'number' ? message.seq : null
+        logger.debug(`[API] handleIncomingMessage: seq=${seq}, lastSeenMessageSeq=${this.lastSeenMessageSeq}`)
+
         if (seq !== null) {
             if (this.lastSeenMessageSeq !== null && seq <= this.lastSeenMessageSeq) {
+                logger.debug(`[API] handleIncomingMessage: DROPPING message with seq=${seq} (already seen, lastSeenMessageSeq=${this.lastSeenMessageSeq})`)
                 return
             }
             this.lastSeenMessageSeq = seq
+            logger.debug(`[API] handleIncomingMessage: Updated lastSeenMessageSeq to ${seq}`)
         }
 
         const userResult = UserMessageSchema.safeParse(message.content)
         if (userResult.success) {
+            logger.debug(`[API] handleIncomingMessage: Parsed as UserMessage, enqueueing`)
             this.enqueueUserMessage(userResult.data)
             return
         }
 
+        logger.debug(`[API] handleIncomingMessage: Not a UserMessage, emitting as generic message`)
         this.emit('message', message.content)
     }
 

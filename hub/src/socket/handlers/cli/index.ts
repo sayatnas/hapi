@@ -38,10 +38,15 @@ export type CliHandlersDeps = {
     onSessionEnd?: (payload: SessionEndPayload) => void
     onMachineAlive?: (payload: MachineAlivePayload) => void
     onWebappEvent?: (event: SyncEvent) => void
+    /**
+     * Called when a new permission request is detected in agentState.requests.
+     * Used for auto-approval in YOLO mode.
+     */
+    onPermissionRequestReceived?: (sessionId: string, requestId: string) => void
 }
 
 export function registerCliHandlers(socket: CliSocketWithData, deps: CliHandlersDeps): void {
-    const { io, store, rpcRegistry, terminalRegistry, onSessionAlive, onSessionEnd, onMachineAlive, onWebappEvent } = deps
+    const { io, store, rpcRegistry, terminalRegistry, onSessionAlive, onSessionEnd, onMachineAlive, onWebappEvent, onPermissionRequestReceived } = deps
     const terminalNamespace = io.of('/terminal')
     const namespace = typeof socket.data.namespace === 'string' ? socket.data.namespace : null
 
@@ -100,7 +105,8 @@ export function registerCliHandlers(socket: CliSocketWithData, deps: CliHandlers
         emitAccessError,
         onSessionAlive,
         onSessionEnd,
-        onWebappEvent
+        onWebappEvent,
+        onPermissionRequestReceived
     })
     registerMachineHandlers(socket, {
         store,

@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { ApiClient } from '@/api/client'
 import type { AttachmentMetadata, DecryptedMessage } from '@/types/api'
 import { makeClientSideId } from '@/lib/messages'
@@ -20,6 +20,7 @@ type SendMessageInput = {
 
 type BlockedReason = 'no-api' | 'no-session' | 'pending'
 
+/** @deprecated Frontend queueing removed - backend handles all queueing for real-time steering */
 export interface QueuedMessage {
     localId: string
     text: string
@@ -62,9 +63,7 @@ export function useSendMessage(
 } {
     const { haptic } = usePlatform()
     const [isResolving, setIsResolving] = useState(false)
-    const [queue, setQueue] = useState<QueuedMessage[]>([])
     const resolveGuardRef = useRef(false)
-    const processingQueueRef = useRef(false)
 
     const mutation = useMutation({
         mutationFn: async (input: SendMessageInput) => {
@@ -137,28 +136,8 @@ export function useSendMessage(
         })()
     }, [api, sessionId, options, mutation, haptic])
 
-    // Process queue - send queued messages when the previous send completes
-    // Messages are queued if user sends while a previous send is in progress
-    useEffect(() => {
-        if (queue.length === 0) return
-        // Only send when no other send is in progress
-        if (mutation.isPending || resolveGuardRef.current) return
-        if (processingQueueRef.current) return
-
-        processingQueueRef.current = true
-        const [next, ...rest] = queue
-
-        if (next) {
-            // Update status from 'queued' to 'sending'
-            if (sessionId) {
-                updateMessageStatus(sessionId, next.localId, 'sending')
-            }
-            doSend(next.text, next.localId, next.createdAt, next.attachments)
-            setQueue(rest)
-        }
-
-        processingQueueRef.current = false
-    }, [queue, mutation.isPending, doSend, sessionId])
+    // Queue processing removed - all messages now sent immediately to backend
+    // Backend handles queueing and real-time steering injection
 
     const sendMessage = (text: string, attachments?: AttachmentMetadata[]) => {
         if (!api) {
@@ -175,40 +154,11 @@ export function useSendMessage(
         const localId = makeClientSideId('local')
         const createdAt = Date.now()
 
-        // Queue if a send API call is in progress (prevents race conditions)
-        // Otherwise send immediately - backend handles mid-turn injection for real-time steering
-        if (mutation.isPending || resolveGuardRef.current) {
-            // Add to queue and show as "queued" status
-            const queuedMessage: QueuedMessage = {
-                localId,
-                text,
-                attachments,
-                createdAt
-            }
-            setQueue(prev => [...prev, queuedMessage])
-
-            // Also add optimistic message with 'queued' status
-            const optimisticMessage: DecryptedMessage = {
-                id: localId,
-                seq: null,
-                localId,
-                content: {
-                    role: 'user',
-                    content: {
-                        type: 'text',
-                        text,
-                        attachments
-                    }
-                },
-                createdAt,
-                status: 'queued',
-                originalText: text,
-            }
-            appendOptimisticMessage(sessionId, optimisticMessage)
-            return
-        }
-
-        // Send immediately - if Claude is thinking, backend injects mid-turn (real-time steering)
+        // Always send immediately - backend handles queueing and mid-turn injection (real-time steering)
+        // The backend's MessageQueue2 will:
+        // 1. If Claude is thinking: inject the message mid-turn via stdin
+        // 2. If Claude is between turns: queue for the next turn
+        // No frontend queueing needed - this enables true real-time steering
         doSend(text, localId, createdAt, attachments)
     }
 
@@ -241,20 +191,17 @@ export function useSendMessage(
         })
     }
 
-    const removeFromQueue = useCallback((localId: string) => {
-        setQueue(prev => prev.filter(m => m.localId !== localId))
-        // Also remove from optimistic messages
-        if (sessionId) {
-            // Mark as failed so it can be removed or retried
-            updateMessageStatus(sessionId, localId, 'failed')
-        }
-    }, [sessionId])
+    /** @deprecated Frontend queueing removed - kept for API compatibility */
+    const removeFromQueue = useCallback((_localId: string) => {
+        // No-op: frontend queueing removed, backend handles all queueing
+    }, [])
 
     return {
         sendMessage,
         retryMessage,
         isSending: mutation.isPending || isResolving,
-        queuedMessages: queue,
+        /** @deprecated Always empty - backend handles queueing for real-time steering */
+        queuedMessages: [],
         removeFromQueue,
     }
 }

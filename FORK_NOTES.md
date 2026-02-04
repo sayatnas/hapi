@@ -361,6 +361,20 @@ The user can resume the session normally, and it will start fresh from the rewou
 - **bypassPermissions**: HAPI intercepts tool calls and auto-approves them in `canCallTool`
 - **dangerouslySkipPermissions**: Claude Code itself handles all permissions natively with no prompts
 
+**Server-Side Auto-Approval:**
+When `dangerouslySkipPermissions` mode is active, the Hub will automatically approve any permission requests that come through. This handles edge cases where permission requests still reach the Hub (e.g., when running as root where Claude Code refuses `--dangerously-skip-permissions`).
+
+The auto-approval logic is in `hub/src/index.ts` via the `onPermissionRequestReceived` callback:
+```typescript
+onPermissionRequestReceived: (sessionId, requestId) => {
+    const session = syncEngine.getSession(sessionId)
+    if (session?.permissionMode === 'dangerouslySkipPermissions') {
+        console.log(`[YOLO] Auto-approving permission request ${requestId}`)
+        void syncEngine.approvePermission(sessionId, requestId)
+    }
+}
+```
+
 **Files Modified:**
 - `shared/src/modes.ts` - Added `dangerouslySkipPermissions` to:
   - `CLAUDE_PERMISSION_MODES` array
@@ -370,6 +384,10 @@ The user can resume the session normally, and it will start fresh from the rewou
 - `cli/src/claude/sdk/query.ts` - Special handling to pass `--dangerously-skip-permissions` flag
 - `cli/src/claude/utils/permissionHandler.ts` - Added to `PLAN_EXIT_MODES` and bypass logic
 - `web/src/api/client.ts` - Updated `approvePermission` method types
+- `hub/src/socket/handlers/cli/sessionHandlers.ts` - Added `onPermissionRequestReceived` callback
+- `hub/src/socket/handlers/cli/index.ts` - Pass through `onPermissionRequestReceived` callback
+- `hub/src/socket/server.ts` - Added `onPermissionRequestReceived` to `SocketServerDeps`
+- `hub/src/index.ts` - Implemented auto-approval logic when session is in YOLO mode
 
 ### 6. YOLO Mode + Abort Crash Fix
 
@@ -410,157 +428,156 @@ child.on('close', (code) => {
 - `web/src/components/AssistantChat/ComposerButtons.tsx` - Removed `disabled` from settings button
 - UI buttons no longer show disabled styling during processing
 
-### 8. Message Queue System
+### 8. Send Messages Anytime (No Frontend Queueing)
 
-**What it does**: Allows users to send messages even while Claude is processing. Messages are queued and sent automatically when the assistant stops thinking.
+**What it does**: Allows users to send messages at any time, even while Claude is processing. Messages are sent immediately to the backend which handles all queueing and mid-turn injection.
 
-**How it works:**
-1. User can type and send messages at any time
-2. If Claude is processing, messages are queued with `'queued'` status
-3. Queued messages appear immediately with a clock icon and "Queued" label
-4. Messages appear slightly greyed out (60% opacity)
-5. When Claude stops thinking, queued messages are sent one by one
+**Previous behavior (removed):**
+- Frontend would queue messages when `mutation.isPending` was true
+- Queued messages would only send when the previous API call completed
+- This caused messages to get "lost" or delayed
+
+**Current behavior:**
+- All messages sent immediately to the backend API
+- Backend's `MessageQueue2` handles queueing
+- If Claude is thinking: message is injected mid-turn via stdin (real-time steering)
+- If Claude is between turns: message queued for the next turn
 
 **Files Modified:**
-- `web/src/hooks/mutations/useSendMessage.ts` - Added queue state and processing logic
-- `web/src/types/api.ts` - Added `'queued'` to `MessageStatus` type
-- `web/src/components/AssistantChat/messages/MessageStatusIndicator.tsx` - Added queued status indicator
-- `web/src/components/AssistantChat/messages/UserMessage.tsx` - Greyed out styling for queued messages
+- `web/src/hooks/mutations/useSendMessage.ts` - Removed frontend queueing; all messages sent immediately
 - `web/src/components/AssistantChat/HappyComposer.tsx` - Removed `threadIsRunning` from `canSend` check
-- `web/src/router.tsx` - Pass `isThinking` to `useSendMessage`
-- `web/src/lib/locales/en.ts` - Added `message.queued` translation
-- `web/src/lib/locales/zh-CN.ts` - Added Chinese translation
 
-**Note**: With real-time steering (see below), messages are now injected mid-process instead of waiting.
+**Why frontend queueing was removed:**
+The frontend queue was blocking messages from reaching the backend where the real-time steering logic lives. By sending messages immediately, the backend can decide whether to inject mid-turn or queue for later.
 
-### 9. Real-Time Steering (Mid-Turn Message Injection)
+### 9. Real-Time Steering (Queue-and-Process-After-Result)
 
-**What it does**: Allows users to send messages to Claude while it's processing, and have those messages injected immediately into the conversation. Claude receives the feedback mid-turn and can adjust its approach.
+**What it does**: Allows users to send messages to Claude while it's processing. Messages are queued and processed together after Claude finishes its current response.
 
-**How it works:**
+**Important Discovery**: Mid-turn stdin injection does NOT interrupt Claude's current response. When messages are injected to stdin while Claude is processing, Claude Code queues them internally and processes them in the NEXT turn, not immediately. This means true "real-time steering" (interrupting Claude mid-thought) is not possible with the current SDK.
+
+**How it actually works:**
 1. User sends a message while Claude is thinking (processing)
-2. Message is sent to the Hub API immediately (only queues if a send API call is already in flight)
+2. Message is sent to the Hub API immediately
 3. Hub pushes the message to the CLI's `MessageQueue2`
-4. `MessageQueue2.onMessage` callback triggers in `claudeRemote.ts`
-5. The callback **consumes** the message from the queue using `popFirst()` and injects it
-6. Message is pushed to the `PushableAsyncIterable` that feeds Claude's stdin
-7. Claude receives the message via `--input-format stream-json` and incorporates it
+4. Messages accumulate in the queue during Claude's processing
+5. When Claude finishes (result received), ALL queued messages are collected
+6. All queued messages are sent as ONE combined message to Claude
+7. Claude processes them together in the next turn
 
-**Technical Details - Consume-and-Inject Pattern:**
+**Technical Details:**
 
-The key challenge was preventing message loss and duplication:
-- If we inject but don't remove from queue → duplicate processing when turn ends
-- If we inject but compaction happens → message could be lost
-
-Solution: **Consume-and-Inject Pattern**
-- When `onMessage` callback fires, use `popFirst()` to REMOVE the message from the queue
-- Then inject into the `PushableAsyncIterable`
-- If compaction/abort happens BEFORE injection, message stays safely in queue for later
-- If injection succeeds, message is removed so `nextMessage()` won't see it again
+The `onMessage` callback in `claudeRemote.ts` no longer injects mid-turn. Instead, it just logs that a message arrived:
 
 ```typescript
-// In claudeRemote.ts - consume-and-inject pattern
+// In claudeRemote.ts - messages accumulate, processed after result
 const injectQueuedMessages = () => {
-    if (!opts.messageQueue || !thinking || messages.done) return;
-
-    while (true) {
-        // popFirst() REMOVES and returns the message
-        const queued = opts.messageQueue.popFirst();
-        if (!queued) break;
-
-        // Inject into stdin stream
-        messages.push({
-            type: 'user',
-            message: { role: 'user', content: queued.message },
-        });
-    }
+    const queueSize = opts.messageQueue?.size() ?? 0;
+    logger.debug(`[claudeRemote] Message arrived - thinking=${thinking}, queueSize=${queueSize}`);
+    // Messages will be processed after result is received
 };
+```
 
-// Callback triggers injection when new messages arrive
-opts.messageQueue.setOnMessage(() => injectQueuedMessages());
+After the result is received, the code checks for queued messages and processes them:
+
+```typescript
+// After result is received
+if (opts.messageQueue && opts.messageQueue.size() > 0) {
+    const queuedMessages: string[] = [];
+    while (opts.messageQueue.size() > 0) {
+        const queued = opts.messageQueue.popFirst();
+        if (queued) {
+            queuedMessages.push(queued.message);
+            mode = queued.mode;
+        }
+    }
+
+    if (queuedMessages.length > 0) {
+        const combinedMessage = queuedMessages.join('\n');
+        messages.push({ type: 'user', message: { role: 'user', content: combinedMessage } });
+        continue; // Process immediately, don't wait for nextMessage
+    }
+}
 ```
 
 **Files Modified:**
 
 **Backend (CLI):**
-- `cli/src/claude/claudeRemote.ts` - Added `messageQueue` parameter and consume-and-inject logic
+- `cli/src/claude/claudeRemote.ts` - Added `messageQueue` parameter and queue-after-result logic
 - `cli/src/claude/claudeRemoteLauncher.ts` - Pass `session.queue` to `claudeRemote`
 - `cli/src/utils/MessageQueue2.ts` - Added `popFirst()` method for consuming messages
 
 **Frontend (Web):**
-- `web/src/hooks/mutations/useSendMessage.ts` - Messages send immediately; only queue when API call in flight
+- `web/src/hooks/mutations/useSendMessage.ts` - All messages sent immediately to backend (no frontend queueing)
 
 **User Experience:**
 - Send messages at any time, even while Claude is working
-- Messages appear in the conversation immediately
-- Claude will receive and process your feedback as soon as possible
-- No more waiting for Claude to finish before you can provide corrections or guidance
-- Messages survive compaction - they won't be lost if compaction happens mid-turn
+- Messages appear in the conversation immediately (optimistic UI)
+- After Claude finishes its current response, it will process ALL your queued messages together
+- No more messages getting "lost" - they're reliably queued and processed
+
+**Why not true mid-turn injection?**
+
+We tried injecting messages directly to Claude's stdin while it was processing. The messages were successfully written to stdin, but Claude Code internally queues them and only processes them after the current turn completes. This is by design in Claude Code - it can't be interrupted mid-response.
 
 **Limitations:**
-- Claude may not immediately act on the injected message if it's in the middle of a tool call
-- The injected message becomes part of the conversation history
-- Rapid message injection may cause Claude to become confused if not given time to process
+- Messages sent during processing won't affect Claude's current response
+- Claude processes all queued messages together after finishing, not one at a time
+- If you send "stop" or "cancel" while Claude is working, it won't stop immediately
 
 ### 10. Queued Message Loss Fix
 
 **Problem**: Messages sent while Claude was thinking would sometimes get "lost" - they appeared in the UI as queued but wouldn't be processed until the user sent another message.
 
-**Root Causes**:
+**Root Cause**: The `injectQueuedMessages()` callback was consuming messages from the queue (via `popFirst()`), but the consumed messages weren't being properly delivered to Claude. This created a race condition where:
+1. Message arrives in queue
+2. `onMessage` callback fires, `popFirst()` removes it from queue
+3. Message was supposed to be injected to stdin, but Claude doesn't interrupt for it
+4. Queue is now empty
+5. When result comes, queue check finds nothing
+6. Message is effectively "lost"
 
-1. **Race condition in `waitForMessagesAndGetAsString`**: When a message was injected mid-turn via `injectQueuedMessages()`, the waiter in `waitForMessagesAndGetAsString()` would wake up and find the queue empty (because the message was already consumed by injection). It would then return `null`, causing `nextMessage()` to return `null`, which ended the session prematurely.
+**Solution**: Changed strategy from "consume-and-inject mid-turn" to "accumulate and process after result":
 
-2. **Timing issue with `thinking` state**: The `onMessage` callback was registered BEFORE `thinking` was set to `true`. If a message arrived in that window, `injectQueuedMessages()` would skip it (because `thinking === false`), and the message would stay in the queue without being injected until another message arrived.
+1. The `onMessage` callback no longer consumes messages - it just logs
+2. Messages accumulate in the queue during Claude's processing
+3. After result is received, ALL queued messages are collected and sent as one batch
+4. This ensures no messages are lost regardless of timing
 
 **Files Modified:**
-- `cli/src/utils/MessageQueue2.ts` - Fixed `waitForMessagesAndGetAsString()` to loop and wait again if queue is empty
-- `cli/src/claude/claudeRemote.ts` - Reordered initialization: set `thinking=true` before registering callback, then inject any pre-queued messages
+- `cli/src/claude/claudeRemote.ts` - Simplified `injectQueuedMessages()` to just log; messages processed after result
+- `cli/src/utils/MessageQueue2.ts` - `waitForMessagesAndGetAsString()` loops if queue was emptied by another consumer
 
-**Fix 1 - MessageQueue2.ts:**
+**Key Code Changes:**
+
 ```typescript
-async waitForMessagesAndGetAsString(abortSignal?: AbortSignal) {
-    // Loop to handle consumed messages
-    while (true) {
-        if (this.queue.length > 0) {
-            return this.collectBatch();
-        }
-        if (this.closed || abortSignal?.aborted) {
-            return null;
-        }
+// claudeRemote.ts - callback no longer consumes, just logs
+const injectQueuedMessages = () => {
+    const queueSize = opts.messageQueue?.size() ?? 0;
+    logger.debug(`[claudeRemote] Message arrived - thinking=${thinking}, queueSize=${queueSize}`);
+    // Messages will be processed after result is received
+};
 
-        const hasMessages = await this.waitForMessages(abortSignal);
-        if (!hasMessages) {
-            return null;
+// After result, process ALL queued messages together
+if (message.type === 'result') {
+    // ...
+    if (opts.messageQueue && opts.messageQueue.size() > 0) {
+        const queuedMessages: string[] = [];
+        while (opts.messageQueue.size() > 0) {
+            const queued = opts.messageQueue.popFirst();
+            if (queued) queuedMessages.push(queued.message);
         }
-
-        // If queue is empty (consumed by injection), wait again
-        if (this.queue.length === 0) {
-            continue;
-        }
-
-        return this.collectBatch();
+        // Send all as one combined message
+        messages.push({ type: 'user', message: { role: 'user', content: queuedMessages.join('\n') } });
+        continue;
     }
 }
 ```
 
-**Fix 2 - claudeRemote.ts:**
-```typescript
-// Start the query
-const response = query({ prompt: messages, options: sdkOptions });
-
-// Set thinking BEFORE registering callback
-updateThinking(true);
-
-// Now register the callback
-if (opts.messageQueue) {
-    opts.messageQueue.setOnMessage(() => {
-        injectQueuedMessages();
-    });
-
-    // Inject any messages already in queue
-    injectQueuedMessages();
-}
-```
+**Why this approach works:**
+- No race conditions - messages stay in queue until explicitly consumed after result
+- No message loss - queue is only emptied when we're ready to process
+- Predictable behavior - all queued messages processed together after Claude finishes
 
 ## Operational Procedures
 

@@ -155,11 +155,11 @@ export async function claudeRemote(opts: {
     // If we have a rewind context summary, prepend it to help Claude understand the conversation history
     // Note: We track whether we successfully used the context so we can clear it only on success
     let usedRewindContext = false;
-    console.log(`[claudeRemote] opts.rewindContextSummary: ${opts.rewindContextSummary ? `${opts.rewindContextSummary.length} chars` : 'undefined'}`);
+    logger.debug(`[claudeRemote] opts.rewindContextSummary: ${opts.rewindContextSummary ? `${opts.rewindContextSummary.length} chars` : 'undefined'}`);
     if (opts.rewindContextSummary) {
         // Log the context size for debugging
         const contextLength = opts.rewindContextSummary.length;
-        console.log(`[claudeRemote] Injecting rewind context summary into system prompt (length: ${contextLength})`);
+        logger.debug(`[claudeRemote] Injecting rewind context summary into system prompt (length: ${contextLength})`);
 
         // Limit context size to prevent potential issues with very large prompts
         // 100KB should be plenty while staying safe
@@ -233,35 +233,18 @@ export async function claudeRemote(opts: {
     // - No lost messages (stays in queue until consumed)
     // - Real-time feedback to Claude mid-turn
 
-    // Function to inject queued messages mid-turn
+    // NOTE: Mid-turn injection doesn't work as expected with Claude Code.
+    // When we inject messages to stdin while Claude is processing, it queues them
+    // internally and processes them in the NEXT turn, not immediately.
+    //
+    // Instead, we let messages accumulate in the queue during thinking, then
+    // process them all together after the result is received (see code after Result handling).
+    //
+    // This callback is kept to log when messages arrive, but doesn't inject.
     const injectQueuedMessages = () => {
-        if (!opts.messageQueue || !thinking || messages.done) {
-            return;
-        }
-
-        // Consume and inject all queued messages
-        let injected = 0;
-        while (true) {
-            const queued = opts.messageQueue.popFirst();
-            if (!queued) break;
-
-            logger.debug(`[claudeRemote] Real-time steering: injecting queued message mid-turn`);
-            // Update current mode if changed
-            mode = queued.mode;
-            // Inject the message directly into the stdin stream
-            messages.push({
-                type: 'user',
-                message: {
-                    role: 'user',
-                    content: queued.message,
-                },
-            });
-            injected++;
-        }
-
-        if (injected > 0) {
-            logger.debug(`[claudeRemote] Injected ${injected} queued message(s) mid-turn`);
-        }
+        const queueSize = opts.messageQueue?.size() ?? 0;
+        logger.debug(`[claudeRemote] Message arrived - thinking=${thinking}, queueSize=${queueSize}`);
+        // Messages will be processed after result is received
     };
 
     // Start the loop
@@ -325,7 +308,7 @@ export async function claudeRemote(opts: {
             // Handle result messages
             if (message.type === 'result') {
                 updateThinking(false);
-                logger.debug('[claudeRemote] Result received, exiting claudeRemote');
+                logger.debug('[claudeRemote] Result received');
 
                 // Send completion messages
                 if (isCompactCommand) {
@@ -339,7 +322,34 @@ export async function claudeRemote(opts: {
                 // Send ready event
                 opts.onReady();
 
-                // Push next message
+                // Check if there are queued messages that arrived while we were thinking
+                // If so, send them immediately without waiting for user input
+                const queueSizeAfterResult = opts.messageQueue?.size() ?? 0;
+                logger.debug(`[claudeRemote] After result: queue size = ${queueSizeAfterResult}`);
+                if (opts.messageQueue && queueSizeAfterResult > 0) {
+                    logger.debug(`[claudeRemote] Found ${queueSizeAfterResult} queued message(s), processing immediately`);
+                    logger.debug(`[claudeRemote] Found ${queueSizeAfterResult} queued message(s), processing immediately`);
+
+                    // Collect all queued messages into one batch
+                    const queuedMessages: string[] = [];
+                    while (opts.messageQueue.size() > 0) {
+                        const queued = opts.messageQueue.popFirst();
+                        if (queued) {
+                            queuedMessages.push(queued.message);
+                            mode = queued.mode; // Use the mode from the last message
+                        }
+                    }
+
+                    if (queuedMessages.length > 0) {
+                        const combinedMessage = queuedMessages.join('\n');
+                        logger.debug(`[claudeRemote] Sending ${queuedMessages.length} queued message(s) as one: "${combinedMessage.substring(0, 50)}..."`);
+                        messages.push({ type: 'user', message: { role: 'user', content: combinedMessage } });
+                        continue; // Continue processing - don't wait for nextMessage
+                    }
+                }
+
+                // No queued messages - wait for user input
+                logger.debug('[claudeRemote] No queued messages, waiting for next message');
                 const next = await opts.nextMessage();
                 if (!next) {
                     messages.end();

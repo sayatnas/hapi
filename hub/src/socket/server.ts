@@ -39,6 +39,11 @@ export type SocketServerDeps = {
     onSessionAlive?: (payload: { sid: string; time: number; thinking?: boolean; mode?: 'local' | 'remote' }) => void
     onSessionEnd?: (payload: { sid: string; time: number }) => void
     onMachineAlive?: (payload: { machineId: string; time: number }) => void
+    /**
+     * Called when a new permission request is detected in agentState.requests.
+     * Used for auto-approval in YOLO mode.
+     */
+    onPermissionRequestReceived?: (sessionId: string, requestId: string) => void
 }
 
 export function createSocketServer(deps: SocketServerDeps): {
@@ -113,7 +118,8 @@ export function createSocketServer(deps: SocketServerDeps): {
         onSessionAlive: deps.onSessionAlive,
         onSessionEnd: deps.onSessionEnd,
         onMachineAlive: deps.onMachineAlive,
-        onWebappEvent: deps.onWebappEvent
+        onWebappEvent: deps.onWebappEvent,
+        onPermissionRequestReceived: deps.onPermissionRequestReceived
     }))
 
     terminalNs.use(async (socket, next) => {

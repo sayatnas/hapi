@@ -320,30 +320,37 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                             return permissionHandler.isAborted(toolCallId);
                         },
                         nextMessage: async () => {
+                            logger.debug(`[remote] nextMessage called - pending=${!!pending}, queueSize=${session.queue.size()}`);
+
                             if (pending) {
                                 let p = pending;
                                 pending = null;
+                                logger.debug(`[remote] nextMessage returning pending message`);
                                 permissionHandler.handleModeChange(p.mode.permissionMode);
                                 return p;
                             }
 
+                            logger.debug(`[remote] nextMessage waiting for messages...`);
                             let msg = await session.queue.waitForMessagesAndGetAsString(controller.signal);
+                            logger.debug(`[remote] nextMessage got message: ${msg ? `"${msg.message.substring(0, 30)}..."` : 'null'}`);
 
                             if (msg) {
                                 if ((modeHash && msg.hash !== modeHash) || msg.isolate) {
-                                    logger.debug('[remote]: mode has changed, pending message');
+                                    logger.debug(`[remote]: mode has changed (modeHash=${modeHash}, msg.hash=${msg.hash}, isolate=${msg.isolate}), setting pending`);
                                     pending = msg;
                                     return null;
                                 }
                                 modeHash = msg.hash;
                                 mode = msg.mode;
                                 permissionHandler.handleModeChange(mode.permissionMode);
+                                logger.debug(`[remote] nextMessage returning message`);
                                 return {
                                     message: msg.message,
                                     mode: msg.mode
                                 };
                             }
 
+                            logger.debug(`[remote] nextMessage returning null (no message)`);
                             return null;
                         },
                         onSessionFound: (sessionId) => {
