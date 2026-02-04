@@ -525,7 +525,49 @@ We tried injecting messages directly to Claude's stdin while it was processing. 
 - Claude processes all queued messages together after finishing, not one at a time
 - If you send "stop" or "cancel" while Claude is working, it won't stop immediately
 
-### 10. Queued Message Loss Fix
+### 10. Windows Native Support
+
+**What it does**: Allows HAPI to run natively on Windows without requiring WSL.
+
+**Problem**: On Windows, `spawn('claude', args, { shell: false })` doesn't work because Windows can't find the executable without a shell. But using `shell: true` causes other issues with argument escaping and command resolution.
+
+**Solution**: Find the absolute path to `claude.exe` and use `shell: false` with the full path.
+
+**Files Modified:**
+- `cli/src/claude/sdk/utils.ts` - Added `findWindowsClaudePath()` function
+- `cli/src/claude/sdk/query.ts` - Changed to `shell: false` with absolute path
+- `cli/src/claude/claudeLocal.ts` - Updated to use `getDefaultClaudeCodePath()` with `shell: false`
+
+**How it works:**
+
+1. `findWindowsClaudePath()` searches for `claude.exe` in common locations:
+   - `~/.local/bin/claude.exe`
+   - `~/AppData/Local/Programs/claude/claude.exe`
+   - WinGet installation path
+   - PATH via `where claude.exe`
+
+2. On Windows, `getDefaultClaudeCodePath()` returns the absolute path
+3. On Unix, it still returns just `'claude'` (works with `shell: false`)
+
+**Environment Variable Override:**
+Set `HAPI_CLAUDE_PATH` to override the Claude executable path:
+```bash
+export HAPI_CLAUDE_PATH="C:\path\to\claude.exe"
+```
+
+**Running on Windows:**
+```bash
+# Build as usual
+bun run build
+
+# Run the server
+hapi-dev server
+
+# Run the runner
+hapi-dev runner start
+```
+
+### 11. Queued Message Loss Fix
 
 **Problem**: Messages sent while Claude was thinking would sometimes get "lost" - they appeared in the UI as queued but wouldn't be processed until the user sent another message.
 
