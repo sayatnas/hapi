@@ -241,11 +241,8 @@ export function SessionChat(props: {
     }, [props.onSend])
 
     const attachmentAdapter = useMemo(() => {
-        if (!props.session.active) {
-            return undefined
-        }
         return createAttachmentAdapter(props.api, props.session.id)
-    }, [props.api, props.session.id, props.session.active])
+    }, [props.api, props.session.id])
 
     const runtime = useHappyRuntime({
         session: props.session,

@@ -285,12 +285,20 @@ export function findCompactionBoundaries(
 
         const msgContent = content as Record<string, unknown>
 
-        // Check for compaction summary message (wrapped SDK format)
+        // Check for compaction boundary messages (wrapped SDK format)
         if (msgContent.role === 'agent' && msgContent.content && typeof msgContent.content === 'object') {
             const wrapper = msgContent.content as Record<string, unknown>
             if (wrapper.type === 'output' && wrapper.data && typeof wrapper.data === 'object') {
                 const data = wrapper.data as Record<string, unknown>
 
+                // Detect Claude Code native compaction boundaries
+                // These are system messages with subtype 'compact_boundary' or 'microcompact_boundary'
+                if (data.type === 'system' && (data.subtype === 'compact_boundary' || data.subtype === 'microcompact_boundary')) {
+                    boundaries.push(row.seq)
+                    continue
+                }
+
+                // Detect HAPI context recovery messages ("This session is being continued...")
                 if (data.type === 'user' && data.message && typeof data.message === 'object') {
                     const message = data.message as Record<string, unknown>
 
@@ -467,22 +475,116 @@ export function buildConversationSummary(
  * @param upToSeq - Optional: only include messages up to this sequence number (for rewind)
  * @returns A formatted string suitable for injection into the system prompt.
  */
+/**
+ * Truncate a string to maxLen, appending a suffix if truncated.
+ */
+function truncStr(s: string, maxLen: number): string {
+    if (s.length <= maxLen) return s
+    return s.slice(0, maxLen) + '…[truncated]'
+}
+
+/**
+ * Format a tool call input for context recovery.
+ * Extracts the most important fields for each known tool type.
+ */
+function formatToolInput(toolName: string, input: unknown): string {
+    if (!input || typeof input !== 'object') return ''
+    const obj = input as Record<string, unknown>
+
+    // File-based tools: show the path and key content
+    if (toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep') {
+        const path = obj.file_path ?? obj.path ?? obj.pattern ?? ''
+        const extra = obj.pattern ? ` pattern="${obj.pattern}"` : ''
+        return `${path}${extra}`
+    }
+    if (toolName === 'Edit') {
+        const path = obj.file_path ?? ''
+        const old_s = typeof obj.old_string === 'string' ? truncStr(obj.old_string, 50000) : ''
+        const new_s = typeof obj.new_string === 'string' ? truncStr(obj.new_string, 50000) : ''
+        return `${path}\n  old: ${old_s}\n  new: ${new_s}`
+    }
+    if (toolName === 'Write') {
+        const path = obj.file_path ?? ''
+        const content = typeof obj.content === 'string' ? truncStr(obj.content, 50000) : ''
+        return `${path}\n${content}`
+    }
+    if (toolName === 'Bash') {
+        const cmd = typeof obj.command === 'string' ? truncStr(obj.command, 50000) : ''
+        return cmd
+    }
+    if (toolName === 'Agent' || toolName === 'Task') {
+        const prompt = typeof obj.prompt === 'string' ? truncStr(obj.prompt, 50000) : ''
+        return prompt
+    }
+
+    // Generic: JSON-stringify with generous limit (context goes via stdin, no ARG_MAX)
+    try {
+        return truncStr(JSON.stringify(input), 50000)
+    } catch {
+        return '[complex input]'
+    }
+}
+
+/**
+ * Format a tool result for context recovery.
+ */
+function formatToolResult(result: unknown): string {
+    if (result === undefined || result === null) return ''
+    if (typeof result === 'string') return truncStr(result, 100000)
+    if (Array.isArray(result)) {
+        // Tool results array from Claude API
+        const texts: string[] = []
+        for (const item of result) {
+            if (item && typeof item === 'object') {
+                const r = item as Record<string, unknown>
+                if (r.type === 'text' && typeof r.text === 'string') {
+                    texts.push(truncStr(r.text, 100000))
+                }
+            }
+        }
+        return texts.join('\n')
+    }
+    try {
+        return truncStr(JSON.stringify(result), 100000)
+    } catch {
+        return '[complex result]'
+    }
+}
+
 export function buildFullConversationHistory(
     db: Database,
     sessionId: string,
     upToSeq?: number
 ): string {
-    const query = upToSeq !== undefined
-        ? 'SELECT seq, content FROM messages WHERE session_id = ? AND seq <= ? ORDER BY seq ASC'
-        : 'SELECT seq, content FROM messages WHERE session_id = ? ORDER BY seq ASC'
+    // Only recover messages AFTER the last compaction boundary.
+    // Everything before that is already summarized in the compaction message itself.
+    // This prevents recovering the entire pre-compaction history (which can be millions of chars).
+    const boundaries = findCompactionBoundaries(db, sessionId)
+    const lastBoundary = boundaries.length > 0 ? boundaries[boundaries.length - 1] : null
 
-    const rows = upToSeq !== undefined
-        ? db.prepare(query).all(sessionId, upToSeq) as DbMessageRow[]
-        : db.prepare(query).all(sessionId) as DbMessageRow[]
+    let query: string
+    let rows: DbMessageRow[]
 
-    console.log(`[buildFullConversationHistory] Session ${sessionId}: found ${rows.length} messages`)
+    if (lastBoundary !== null) {
+        // Start from the compaction boundary message (inclusive — it contains the summary)
+        query = upToSeq !== undefined
+            ? 'SELECT seq, content FROM messages WHERE session_id = ? AND seq >= ? AND seq <= ? ORDER BY seq ASC'
+            : 'SELECT seq, content FROM messages WHERE session_id = ? AND seq >= ? ORDER BY seq ASC'
+        rows = upToSeq !== undefined
+            ? db.prepare(query).all(sessionId, lastBoundary, upToSeq) as DbMessageRow[]
+            : db.prepare(query).all(sessionId, lastBoundary) as DbMessageRow[]
+        console.log(`[buildFullConversationHistory] Session ${sessionId}: found ${rows.length} messages after compaction boundary seq=${lastBoundary} (skipped ${lastBoundary} pre-compaction messages)`)
+    } else {
+        query = upToSeq !== undefined
+            ? 'SELECT seq, content FROM messages WHERE session_id = ? AND seq <= ? ORDER BY seq ASC'
+            : 'SELECT seq, content FROM messages WHERE session_id = ? ORDER BY seq ASC'
+        rows = upToSeq !== undefined
+            ? db.prepare(query).all(sessionId, upToSeq) as DbMessageRow[]
+            : db.prepare(query).all(sessionId) as DbMessageRow[]
+        console.log(`[buildFullConversationHistory] Session ${sessionId}: found ${rows.length} messages (no compaction boundaries found)`)
+    }
 
-    const conversations: Array<{ role: 'user' | 'assistant'; text: string }> = []
+    const entries: Array<{ role: 'user' | 'assistant' | 'tool'; text: string }> = []
 
     for (const row of rows) {
         const content = safeJsonParse(row.content)
@@ -496,7 +598,7 @@ export function buildFullConversationHistory(
             if (contentObj.type === 'text' && typeof contentObj.text === 'string') {
                 const text = contentObj.text.trim()
                 if (text.length > 0) {
-                    conversations.push({ role: 'user', text })
+                    entries.push({ role: 'user', text })
                 }
             }
             continue
@@ -510,87 +612,100 @@ export function buildFullConversationHistory(
 
                 // Skip sidechain messages
                 if (data.isSidechain === true) continue
+                // Skip rate limit events and other internal events
+                if (data.type === 'rate_limit_event') continue
 
-                // User messages
+                // User messages (including tool results)
                 if (data.type === 'user' && data.message && typeof data.message === 'object') {
                     const message = data.message as Record<string, unknown>
                     if (message.role !== 'user') continue
 
-                    let text: string | null = null
                     if (typeof message.content === 'string') {
-                        text = message.content
-                    } else if (Array.isArray(message.content)) {
-                        // Skip if only tool results
-                        const hasOnlyToolResults = message.content.every(
-                            (item: unknown) =>
-                                item && typeof item === 'object' &&
-                                ((item as Record<string, unknown>).type === 'tool_result' ||
-                                 (item as Record<string, unknown>).tool_use_id)
-                        )
-                        if (hasOnlyToolResults) continue
-
-                        const textContent = message.content.find(
-                            (item: unknown) =>
-                                item && typeof item === 'object' &&
-                                (item as Record<string, unknown>).type === 'text'
-                        ) as Record<string, unknown> | undefined
-
-                        if (textContent && typeof textContent.text === 'string') {
-                            text = textContent.text
+                        const text = message.content.trim()
+                        if (text.length > 0 && !text.startsWith('<local-command-caveat>') && !text.startsWith('This session is being continued')) {
+                            entries.push({ role: 'user', text })
                         }
-                    }
+                    } else if (Array.isArray(message.content)) {
+                        for (const item of message.content) {
+                            if (!item || typeof item !== 'object') continue
+                            const ci = item as Record<string, unknown>
 
-                    if (text && text.trim().length > 0) {
-                        // Skip system/automated messages
-                        if (text.startsWith('<local-command-caveat>')) continue
-                        if (text.startsWith('This session is being continued')) continue
+                            if (ci.type === 'text' && typeof ci.text === 'string') {
+                                const text = ci.text.trim()
+                                if (text.length > 0 && !text.startsWith('<local-command-caveat>') && !text.startsWith('This session is being continued')) {
+                                    entries.push({ role: 'user', text })
+                                }
+                            }
 
-                        conversations.push({ role: 'user', text: text.trim() })
+                            // Skip tool results — including them teaches Claude to output
+                            // tool calls as text instead of using the tool_use API
+                        }
                     }
                 }
 
-                // Assistant messages (text only, skip tool calls)
+                // Assistant messages — include BOTH text AND tool calls
                 if (data.type === 'assistant' && data.message && typeof data.message === 'object') {
                     const message = data.message as Record<string, unknown>
                     if (message.role !== 'assistant') continue
 
                     if (Array.isArray(message.content)) {
                         for (const item of message.content) {
-                            if (item && typeof item === 'object') {
-                                const contentItem = item as Record<string, unknown>
-                                if (contentItem.type === 'text' && typeof contentItem.text === 'string') {
-                                    const text = contentItem.text.trim()
-                                    if (text.length > 0) {
-                                        conversations.push({ role: 'assistant', text })
-                                    }
+                            if (!item || typeof item !== 'object') continue
+                            const ci = item as Record<string, unknown>
+
+                            // Text content
+                            if (ci.type === 'text' && typeof ci.text === 'string') {
+                                const text = ci.text.trim()
+                                if (text.length > 0) {
+                                    entries.push({ role: 'assistant', text })
                                 }
+                            }
+
+                            // Skip tool_use blocks — including them in text form teaches
+                            // Claude to output tool calls as text instead of using tool_use API.
+                            // Only include a brief note that a tool was used.
+                            if (ci.type === 'tool_use' && typeof ci.name === 'string') {
+                                entries.push({
+                                    role: 'assistant',
+                                    text: `(used ${ci.name} tool)`
+                                })
                             }
                         }
                     }
                 }
+
+                // Skip result messages — they contain tool call summaries in text form
+                // that teach Claude to mimic the format instead of using tool_use API
             }
         }
     }
 
-    console.log(`[buildFullConversationHistory] Extracted ${conversations.length} conversation entries`)
+    console.log(`[buildFullConversationHistory] Extracted ${entries.length} conversation entries (with tool context)`)
 
-    // Build formatted full history
-    if (conversations.length === 0) {
+    if (entries.length === 0) {
         return ''
     }
 
     const lines: string[] = [
         '## Previous Conversation History',
         '',
-        'This session was interrupted and is being continued. Below is the complete conversation history from before the interruption. Use this context to continue helping the user seamlessly:',
+        'This session was interrupted and is being continued. Below is the complete conversation history from before the interruption, including tool calls and their results. Use this context to continue helping the user seamlessly:',
         ''
     ]
 
-    for (const conv of conversations) {
-        const roleLabel = conv.role === 'user' ? 'User' : 'Assistant'
-        lines.push(`**${roleLabel}:**`)
-        lines.push(conv.text)
-        lines.push('')
+    for (const entry of entries) {
+        if (entry.role === 'user') {
+            lines.push(`**User:**`)
+            lines.push(entry.text)
+            lines.push('')
+        } else if (entry.role === 'assistant') {
+            lines.push(`**Assistant:**`)
+            lines.push(entry.text)
+            lines.push('')
+        } else if (entry.role === 'tool') {
+            lines.push(entry.text)
+            lines.push('')
+        }
     }
 
     lines.push('---')

@@ -1,4 +1,5 @@
-import { ComposerPrimitive } from '@assistant-ui/react'
+import { useAssistantApi } from '@assistant-ui/react'
+import { useEffect, useRef, useState } from 'react'
 import type { ConversationStatus } from '@/realtime/types'
 import { useTranslation } from '@/lib/use-translation'
 
@@ -296,6 +297,144 @@ function UnifiedButton(props: {
     )
 }
 
+/**
+ * iOS PWA-safe attachment button.
+ *
+ * Multiple fallback strategies for iOS PWA where change events may not fire:
+ * 1. Native change event listener (works on desktop and most browsers)
+ * 2. visibilitychange/focus fallback (fires when web view regains focus after picker)
+ * 3. Polling input.files while picker is open (last resort — catches files even with no events)
+ *
+ * Errors from addAttachment are surfaced visibly so failures aren't silently swallowed.
+ */
+function ComposerAttachButton(props: { disabled?: boolean; className?: string; children: React.ReactNode; label: string }) {
+    const api = useAssistantApi()
+    const inputRef = useRef<HTMLInputElement>(null)
+    const pickerOpenRef = useRef(false)
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+    const [attachError, setAttachError] = useState<string | null>(null)
+
+    useEffect(() => {
+        const input = inputRef.current
+        if (!input) return
+
+        const stopPolling = () => {
+            if (pollRef.current !== null) {
+                clearInterval(pollRef.current)
+                pollRef.current = null
+            }
+        }
+
+        const processFiles = async (files: File[]) => {
+            for (const file of files) {
+                try {
+                    await api.composer().addAttachment(file)
+                    setAttachError(null)
+                } catch (e) {
+                    const msg = e instanceof Error ? e.message : String(e)
+                    console.error('[attach] addAttachment failed:', msg)
+                    setAttachError(msg)
+                    // Auto-clear error after 4 seconds
+                    setTimeout(() => setAttachError(null), 4000)
+                }
+            }
+        }
+
+        const consumeFiles = (): boolean => {
+            const files = input.files
+            if (!files || files.length === 0) return false
+            const fileArray = Array.from(files)
+            input.value = ''
+            pickerOpenRef.current = false
+            stopPolling()
+            void processFiles(fileArray)
+            return true
+        }
+
+        // Primary: native change event
+        input.addEventListener('change', consumeFiles)
+
+        // Fallback 1: visibilitychange / focus (iOS PWA web view may go hidden during picker)
+        const onVisibility = () => {
+            if (document.hidden || !pickerOpenRef.current) return
+            setTimeout(consumeFiles, 200)
+        }
+        document.addEventListener('visibilitychange', onVisibility)
+        window.addEventListener('focus', onVisibility)
+
+        // Fallback 2: polling — catches files even when no events fire at all
+        const startPolling = () => {
+            if (pollRef.current !== null) return
+            const deadline = Date.now() + 120_000 // 2 minute timeout
+            pollRef.current = setInterval(() => {
+                if (!pickerOpenRef.current || Date.now() > deadline) {
+                    pickerOpenRef.current = false
+                    stopPolling()
+                    return
+                }
+                consumeFiles()
+            }, 250)
+        }
+
+        const onInputClick = () => {
+            pickerOpenRef.current = true
+            startPolling()
+        }
+        input.addEventListener('click', onInputClick)
+
+        return () => {
+            input.removeEventListener('change', consumeFiles)
+            input.removeEventListener('click', onInputClick)
+            document.removeEventListener('visibilitychange', onVisibility)
+            window.removeEventListener('focus', onVisibility)
+            stopPolling()
+        }
+    }, [api])
+
+    return (
+        <div
+            aria-label={props.label}
+            title={props.label}
+            className={`relative ${props.className ?? ''} ${props.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
+        >
+            {props.children}
+            {attachError ? (
+                <div
+                    style={{
+                        position: 'absolute',
+                        bottom: '100%',
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        whiteSpace: 'nowrap',
+                        pointerEvents: 'none',
+                    }}
+                    className="mb-1 rounded bg-red-500 px-2 py-1 text-xs text-white"
+                >
+                    {attachError}
+                </div>
+            ) : null}
+            {!props.disabled && (
+                <input
+                    ref={inputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    style={{
+                        position: 'absolute',
+                        inset: 0,
+                        opacity: 0.01,
+                        cursor: 'pointer',
+                        fontSize: 0,
+                        zIndex: 1,
+                    }}
+                    aria-hidden="true"
+                    tabIndex={-1}
+                />
+            )}
+        </div>
+    )
+}
+
 export function ComposerButtons(props: {
     canSend: boolean
     controlsDisabled: boolean
@@ -325,14 +464,13 @@ export function ComposerButtons(props: {
     return (
         <div className="flex items-center justify-between px-2 pb-2">
             <div className="flex items-center gap-1">
-                <ComposerPrimitive.AddAttachment
-                    aria-label={t('composer.attach')}
-                    title={t('composer.attach')}
+                <ComposerAttachButton
+                    label={t('composer.attach')}
                     disabled={props.controlsDisabled}
                     className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--app-fg)]/60 transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                     <AttachmentIcon />
-                </ComposerPrimitive.AddAttachment>
+                </ComposerAttachButton>
 
                 {props.showSettingsButton ? (
                     <button

@@ -17,11 +17,13 @@ export function reduceTimeline(
     const blocks: ChatBlock[] = []
     const toolBlocksById = new Map<string, ToolCallBlock>()
     let hasReadyEvent = false
+    let latestReadyAt: number | null = null
 
     for (const msg of messages) {
         if (msg.role === 'event') {
             if (msg.content.type === 'ready') {
                 hasReadyEvent = true
+                latestReadyAt = msg.createdAt
                 continue
             }
             blocks.push({
@@ -154,7 +156,7 @@ export function reduceTimeline(
                         block.tool.startedAt = msg.createdAt
                     }
 
-                    if (c.name === 'Task' && !context.consumedGroupIds.has(msg.id)) {
+                    if ((c.name === 'Task' || c.name === 'Agent') && !context.consumedGroupIds.has(msg.id)) {
                         const sidechain = context.groups.get(msg.id) ?? null
                         if (sidechain && sidechain.length > 0) {
                             context.consumedGroupIds.add(msg.id)
@@ -229,6 +231,20 @@ export function reduceTimeline(
                         text: c.prompt
                     })
                 }
+            }
+        }
+    }
+
+    // Mark orphaned running tools as interrupted.
+    // A tool is orphaned if it's still 'running' but the session sent a 'ready' event
+    // AFTER the tool was started — meaning the turn ended without the tool completing.
+    // This handles crash recovery: the CLI sends a ready event when it restarts,
+    // but the old tool_result was never delivered.
+    if (latestReadyAt !== null) {
+        for (const [, block] of toolBlocksById) {
+            if (block.tool.state === 'running' && block.tool.result === undefined && block.createdAt < latestReadyAt) {
+                block.tool.state = 'error'
+                block.tool.result = 'Interrupted'
             }
         }
     }

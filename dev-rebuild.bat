@@ -10,6 +10,7 @@ REM   project_dir: Optional. Directory to run server from (default: K:\BENCH\PRO
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 set "HAPI_EXE=%SCRIPT_DIR%\cli\dist-exe\bun-windows-x64\hapi.exe"
+set "BUN_EXE=%USERPROFILE%\.bun\bin\bun.exe"
 set "PROJECT_DIR=%~1"
 if "%PROJECT_DIR%"=="" set "PROJECT_DIR=K:\BENCH\PROJECTS\BoundMore"
 
@@ -40,7 +41,7 @@ echo [INFO] Starting full rebuild...
 cd /d "%SCRIPT_DIR%"
 
 echo [INFO] Building single executable...
-call bun run build:single-exe
+call "%BUN_EXE%" run build:single-exe
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Build failed!
     exit /b 1

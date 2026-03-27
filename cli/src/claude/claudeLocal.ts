@@ -20,6 +20,7 @@ export async function claudeLocal(opts: {
     claudeArgs?: string[]
     allowedTools?: string[]
     hookSettingsPath: string
+    permissionMode?: string
 }) {
 
     // Ensure project directory exists
@@ -62,9 +63,26 @@ export async function claudeLocal(opts: {
         args.push('--allowedTools', opts.allowedTools.join(','));
     }
 
-    // Add custom Claude arguments
+    // Add custom Claude arguments (filter out --dangerously-skip-permissions, handled below)
     if (opts.claudeArgs) {
-        args.push(...opts.claudeArgs);
+        const filtered = opts.claudeArgs.filter(a => a !== '--dangerously-skip-permissions');
+        if (filtered.length > 0) {
+            args.push(...filtered);
+        }
+    }
+
+    // Add --dangerously-skip-permissions for yolo modes in local (interactive) mode
+    // Only when NOT running as root - Claude Code rejects this flag under root/sudo
+    if (opts.permissionMode === 'bypassPermissions' || opts.permissionMode === 'dangerouslySkipPermissions') {
+        const isRoot = (typeof process.getuid === 'function' && process.getuid() === 0)
+            || process.env.USER === 'root'
+            || process.env.EUID === '0'
+            || process.env.SUDO_USER !== undefined;
+        if (!isRoot) {
+            args.push('--dangerously-skip-permissions');
+        } else {
+            logger.debug('[ClaudeLocal] Skipping --dangerously-skip-permissions: running as root/sudo');
+        }
     }
 
     // Add hook settings for session tracking

@@ -83,6 +83,12 @@ export class NotificationHub {
     }
 
     private checkForPermissionNotification(session: Session): void {
+        // Skip permission notifications for yolo modes — permissions are auto-approved
+        const mode = session.permissionMode
+        if (mode === 'bypassPermissions' || mode === 'dangerouslySkipPermissions') {
+            return
+        }
+
         const requests = session.agentState?.requests
 
         if (requests == null) {

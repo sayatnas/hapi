@@ -9,7 +9,7 @@ import { Bot, Context, InlineKeyboard } from 'grammy'
 import { SyncEngine, Session } from '../sync/syncEngine'
 import { handleCallback, CallbackContext } from './callbacks'
 import { formatSessionNotification, createNotificationKeyboard } from './sessionView'
-import { getAgentName } from '../notifications/sessionInfo'
+import { getSessionName } from '../notifications/sessionInfo'
 import type { NotificationChannel } from '../notifications/notificationTypes'
 import type { Store } from '../store'
 
@@ -112,11 +112,22 @@ export class HappyBot implements NotificationChannel {
             await ctx.reply('Open HAPI Mini App:', { reply_markup: keyboard })
         })
 
-        // /start - Simple welcome with Mini App link
+        // /start - Welcome, auto-bind, and Mini App link
         this.bot.command('start', async (ctx) => {
+            const chatId = ctx.from?.id
+            if (chatId) {
+                const existing = this.store.users.getUser('telegram', String(chatId))
+                if (!existing) {
+                    // Auto-bind to default namespace on first /start
+                    this.store.users.addUser('telegram', String(chatId), 'default')
+                    console.log(`[HAPIBot] Auto-bound Telegram user ${chatId} to namespace 'default'`)
+                }
+            }
+
             const keyboard = new InlineKeyboard().webApp('Open App', this.publicUrl)
             await ctx.reply(
-                'Welcome to HAPI Bot!\n\n' +
+                'Welcome to HAPI Bot! You are now connected.\n\n' +
+                'You will receive notifications when sessions need your attention.\n' +
                 'Use the Mini App for full session management.',
                 { reply_markup: keyboard }
             )
@@ -189,7 +200,7 @@ export class HappyBot implements NotificationChannel {
             return
         }
 
-        const agentName = getAgentName(session)
+        const sessionName = getSessionName(session)
         const url = buildMiniAppDeepLink(this.publicUrl, `session_${session.id}`)
         const keyboard = new InlineKeyboard()
             .webApp('Open Session', url)
@@ -203,7 +214,7 @@ export class HappyBot implements NotificationChannel {
             try {
                 await this.bot.api.sendMessage(
                     chatId,
-                    `It's ready!\n\n${agentName} is waiting for your command`,
+                    `${sessionName} is ready`,
                     { reply_markup: keyboard }
                 )
             } catch (error) {

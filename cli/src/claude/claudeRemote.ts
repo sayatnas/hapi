@@ -147,30 +147,20 @@ export async function claudeRemote(opts: {
         return;
     }
 
-    // Build append system prompt with optional rewind context
+    // Build append system prompt (without rewind context — that goes via stdin to avoid ARG_MAX)
     let baseAppendPrompt = initial.mode.appendSystemPrompt
         ? initial.mode.appendSystemPrompt + '\n\n' + systemPrompt
         : systemPrompt;
 
-    // If we have a rewind context summary, prepend it to help Claude understand the conversation history
-    // Note: We track whether we successfully used the context so we can clear it only on success
+    // Recovery context is injected as a message prefix (via stdin), NOT as --append-system-prompt
+    // (CLI arg), to avoid Linux ARG_MAX (~2MB) limits. No truncation needed.
     let usedRewindContext = false;
+    let rewindContextPrefix = '';
     logger.debug(`[claudeRemote] opts.rewindContextSummary: ${opts.rewindContextSummary ? `${opts.rewindContextSummary.length} chars` : 'undefined'}`);
     if (opts.rewindContextSummary) {
-        // Log the context size for debugging
         const contextLength = opts.rewindContextSummary.length;
-        logger.debug(`[claudeRemote] Injecting rewind context summary into system prompt (length: ${contextLength})`);
-
-        // Limit context size to prevent potential issues with very large prompts
-        // 100KB should be plenty while staying safe
-        const MAX_CONTEXT_SIZE = 100 * 1024;
-        if (contextLength > MAX_CONTEXT_SIZE) {
-            logger.debug(`[claudeRemote] Context too large (${contextLength}), truncating to ${MAX_CONTEXT_SIZE}`);
-            const truncated = opts.rewindContextSummary.slice(0, MAX_CONTEXT_SIZE) + '\n\n[Context truncated due to size...]';
-            baseAppendPrompt = truncated + '\n\n' + baseAppendPrompt;
-        } else {
-            baseAppendPrompt = opts.rewindContextSummary + '\n\n' + baseAppendPrompt;
-        }
+        logger.debug(`[claudeRemote] Recovery context: ${contextLength} chars — will inject via stdin (no truncation)`);
+        rewindContextPrefix = `<conversation-history>\nThis session is being continued from a previous conversation. The summary below covers the earlier portion of the conversation.\n\n${opts.rewindContextSummary}\n</conversation-history>\n\nPlease continue the conversation from where we left off. The user's new message follows:\n\n`;
         usedRewindContext = true;
     }
 
@@ -209,13 +199,16 @@ export async function claudeRemote(opts: {
         }
     };
 
-    // Push initial message
+    // Push initial message (with recovery context prefix if available — goes via stdin, no ARG_MAX)
     let messages = new PushableAsyncIterable<SDKUserMessage>();
+    const initialContent = rewindContextPrefix
+        ? rewindContextPrefix + initial.message
+        : initial.message;
     messages.push({
         type: 'user',
         message: {
             role: 'user',
-            content: initial.message,
+            content: initialContent,
         },
     });
 
@@ -270,6 +263,12 @@ export async function claudeRemote(opts: {
         // (e.g., user sent message while claudeRemote was starting up)
         injectQueuedMessages();
     }
+    // Track pending user message promise across result iterations.
+    // When a background task notification (SDK message) arrives before the user sends
+    // a message, we save the pending nextMessage() promise here so it isn't lost.
+    // On the next result, we reuse it instead of calling nextMessage() again.
+    let pendingUserMessage: Promise<{ message: string, mode: EnhancedMode } | null> | null = null;
+
     try {
         logger.debug(`[claudeRemote] Starting to iterate over response`);
 
@@ -328,7 +327,6 @@ export async function claudeRemote(opts: {
                 logger.debug(`[claudeRemote] After result: queue size = ${queueSizeAfterResult}`);
                 if (opts.messageQueue && queueSizeAfterResult > 0) {
                     logger.debug(`[claudeRemote] Found ${queueSizeAfterResult} queued message(s), processing immediately`);
-                    logger.debug(`[claudeRemote] Found ${queueSizeAfterResult} queued message(s), processing immediately`);
 
                     // Collect all queued messages into one batch
                     const queuedMessages: string[] = [];
@@ -348,13 +346,65 @@ export async function claudeRemote(opts: {
                     }
                 }
 
-                // No queued messages - wait for user input
-                logger.debug('[claudeRemote] No queued messages, waiting for next message');
-                const next = await opts.nextMessage();
+                // Race between user input and new SDK messages (background task notifications).
+                // Without this race, background task completions get buffered in the SDK stream
+                // while we block on nextMessage(), causing responses to lag behind user messages.
+                const userPromise: Promise<{ message: string, mode: EnhancedMode } | null> = pendingUserMessage || opts.nextMessage();
+                pendingUserMessage = null;
+
+                const sdkPromise = response.waitForNewMessage().then(() => '__sdk_notification__' as const);
+
+                logger.debug('[claudeRemote] Racing: user input vs SDK messages');
+                const raceResult = await Promise.race([
+                    sdkPromise,
+                    userPromise,
+                ]);
+
+                if (raceResult === '__sdk_notification__') {
+                    // Background task notification arrived before user input.
+                    // Save the pending user message promise so it isn't lost.
+                    logger.debug('[claudeRemote] SDK message arrived (background task notification) — processing before user input');
+                    pendingUserMessage = userPromise;
+                    response.cancelWaitForNewMessage();
+                    updateThinking(true);
+                    continue; // Let the for-await loop process the buffered SDK messages
+                }
+
+                // User message arrived first (or nextMessage returned null for mode change/abort)
+                response.cancelWaitForNewMessage();
+                const next = raceResult;
+
                 if (!next) {
                     messages.end();
                     return;
                 }
+
+                // Intercept special commands mid-session (/recover, /clear, /rewind, /compact)
+                const midCmd = parseSpecialCommand(next.message);
+                if (midCmd.type === 'recover') {
+                    logger.debug('[claudeRemote] /recover mid-session — exiting to trigger context recovery');
+                    if (opts.onCompletionEvent) opts.onCompletionEvent('__recover_context__');
+                    if (opts.onSessionReset) opts.onSessionReset();
+                    messages.end();
+                    return;
+                }
+                if (midCmd.type === 'clear') {
+                    logger.debug('[claudeRemote] /clear mid-session');
+                    if (opts.onCompletionEvent) opts.onCompletionEvent('Context was reset');
+                    if (opts.onSessionReset) opts.onSessionReset();
+                    messages.end();
+                    return;
+                }
+                if (midCmd.type === 'rewind') {
+                    logger.debug('[claudeRemote] /rewind mid-session');
+                    if (opts.onCompletionEvent) {
+                        const targetSeq = midCmd.rewindOptions?.targetSeq;
+                        opts.onCompletionEvent(targetSeq !== undefined ? `__rewind_to_seq__:${targetSeq}` : '__rewind_requested__');
+                    }
+                    messages.end();
+                    return;
+                }
+
                 mode = next.mode;
                 messages.push({ type: 'user', message: { role: 'user', content: next.message } });
             }

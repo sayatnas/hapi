@@ -188,7 +188,9 @@ async function main() {
             // Auto-approve if in dangerous YOLO mode
             if (session.permissionMode === 'dangerouslySkipPermissions') {
                 console.log(`[YOLO] Auto-approving permission request ${requestId} for session ${sessionId}`)
-                void syncEngine.approvePermission(sessionId, requestId)
+                syncEngine.approvePermission(sessionId, requestId).catch((error) => {
+                    console.error(`[YOLO] Failed to auto-approve ${requestId}: ${error instanceof Error ? error.message : error}`)
+                })
             }
         }
     })

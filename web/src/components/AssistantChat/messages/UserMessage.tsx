@@ -43,11 +43,11 @@ export function HappyUserMessage() {
     const onRetry = canRetry ? () => ctx.onRetryMessage!(localId) : undefined
     const isQueued = status === 'queued'
 
-    const userBubbleClass = `w-fit min-w-0 max-w-[92%] ml-auto rounded-xl bg-[var(--app-secondary-bg)] px-3 py-2 text-[var(--app-fg)] shadow-sm ${isQueued ? 'opacity-60' : ''}`
+    const userBubbleClass = 'isolate w-fit min-w-0 max-w-[92%] ml-auto rounded-xl bg-[var(--app-secondary-bg)] px-3 py-2 text-[var(--app-fg)] shadow-sm'
 
     if (isCliOutput) {
         return (
-            <MessagePrimitive.Root className="px-1 min-w-0 max-w-full overflow-x-hidden">
+            <MessagePrimitive.Root className="isolate px-1 min-w-0 max-w-full overflow-x-hidden">
                 <div className="ml-auto w-full max-w-[92%]">
                     <CliOutputBlock text={cliText} />
                 </div>
@@ -60,7 +60,7 @@ export function HappyUserMessage() {
 
     return (
         <MessagePrimitive.Root className={userBubbleClass}>
-            <div className="flex items-end gap-2">
+            <div className={`flex items-end gap-2${isQueued ? ' opacity-60' : ''}`}>
                 <div className="flex-1 min-w-0">
                     {hasText && <LazyRainbowText text={text} />}
                     {hasAttachments && <MessageAttachments attachments={attachments} />}

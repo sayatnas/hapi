@@ -74,23 +74,20 @@ function getEmbeddedTimestamp(msg: DecryptedMessage): number | null {
 }
 
 function compareMessages(a: DecryptedMessage, b: DecryptedMessage): number {
-    // Primary sort: use embedded timestamp if available (actual creation time)
-    const aEmbedded = getEmbeddedTimestamp(a)
-    const bEmbedded = getEmbeddedTimestamp(b)
-    if (aEmbedded !== null && bEmbedded !== null && aEmbedded !== bEmbedded) {
-        return aEmbedded - bEmbedded
+    // Primary sort: use embedded timestamp when available, fall back to createdAt.
+    // This ensures messages with embedded timestamps (CLI/agent messages) and those
+    // without (web UI user messages) are compared on the same timescale.
+    const aTime = getEmbeddedTimestamp(a) ?? a.createdAt
+    const bTime = getEmbeddedTimestamp(b) ?? b.createdAt
+    if (aTime !== bTime) {
+        return aTime - bTime
     }
 
-    // Secondary sort: by seq (storage order)
+    // Tiebreaker: by seq (storage order)
     const aSeq = typeof a.seq === 'number' ? a.seq : null
     const bSeq = typeof b.seq === 'number' ? b.seq : null
     if (aSeq !== null && bSeq !== null && aSeq !== bSeq) {
         return aSeq - bSeq
-    }
-
-    // Tertiary sort: by createdAt (storage timestamp)
-    if (a.createdAt !== b.createdAt) {
-        return a.createdAt - b.createdAt
     }
 
     // Final tiebreaker: by id

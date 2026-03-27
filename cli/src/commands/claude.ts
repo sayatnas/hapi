@@ -38,10 +38,11 @@ export const claudeCommand: CommandDefinition = {
                 options.startingMode = z.enum(['local', 'remote']).parse(args[++i])
             } else if (arg === '--yolo') {
                 options.permissionMode = 'bypassPermissions'
-                unknownArgs.push('--dangerously-skip-permissions')
+                // Note: --dangerously-skip-permissions is NOT passed via claudeArgs.
+                // Remote mode: HAPI's canCallTool callback handles auto-approval.
+                // Local mode: claudeLocal.ts adds the flag with root detection.
             } else if (arg === '--dangerously-skip-permissions') {
                 options.permissionMode = 'bypassPermissions'
-                unknownArgs.push(arg)
             } else if (arg === '--model') {
                 const model = args[++i]
                 if (!model) {

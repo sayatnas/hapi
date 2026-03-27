@@ -34,7 +34,12 @@ async function downloadFile(url: string, destPath: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-    const scriptDir = dirname(new URL(import.meta.url).pathname);
+    // Handle Windows paths - URL pathname has leading slash on Windows (e.g., /K:/path)
+    let scriptPath = new URL(import.meta.url).pathname;
+    if (process.platform === 'win32' && /^\/[a-zA-Z]:/.test(scriptPath)) {
+        scriptPath = scriptPath.slice(1); // Remove leading slash
+    }
+    const scriptDir = dirname(scriptPath);
     const toolsDir = join(scriptDir, '..', 'tools', 'tunwg');
 
     console.log('Downloading tunwg binaries...\n');

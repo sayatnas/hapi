@@ -215,6 +215,10 @@ export class SDKToLogConverter {
                 break
             }
 
+            case 'rate_limit_event':
+                // Internal SDK rate limit telemetry - not part of conversation, don't forward to UI
+                break
+
             default:
                 // Unknown message type - pass through with all fields
                 logMessage = {

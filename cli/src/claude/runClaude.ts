@@ -18,6 +18,17 @@ import { isModelModeAllowedForFlavor, isPermissionModeAllowedForFlavor } from '@
 import { ModelModeSchema, PermissionModeSchema } from '@hapi/protocol/schemas';
 import { formatMessageWithAttachments } from '@/utils/attachmentFormatter';
 
+/** Map HAPI model mode short aliases to the Claude Code model string.
+ *  opus[1m] enables the 1M token context window (included for Max/Team, extra usage for Pro). */
+const MODEL_ID_MAP: Record<string, string> = {
+    default: 'opus[1m]',
+    opus: 'opus[1m]',
+    sonnet: 'sonnet',
+}
+function resolveModelId(modelMode: SessionModelMode): string | undefined {
+    return MODEL_ID_MAP[modelMode] ?? undefined
+}
+
 export interface StartOptions {
     model?: string
     permissionMode?: PermissionMode
@@ -143,7 +154,7 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
 
     // Forward messages to the queue
     let currentPermissionMode: PermissionMode = options.permissionMode ?? 'default';
-    let currentModelMode: SessionModelMode = options.model === 'sonnet' || options.model === 'opus' ? options.model : 'default';
+    let currentModelMode: SessionModelMode = options.model === 'sonnet' || options.model === 'opus' ? options.model : 'default'; // 'auto' → 'default'
     let currentFallbackModel: string | undefined = undefined; // Track current fallback model
     let currentCustomSystemPrompt: string | undefined = undefined; // Track current custom system prompt
     let currentAppendSystemPrompt: string | undefined = undefined; // Track current append system prompt
@@ -165,7 +176,7 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
             currentPermissionMode = sessionPermissionMode as PermissionMode;
         }
         const messagePermissionMode = currentPermissionMode;
-        const messageModel = currentModelMode === 'default' ? undefined : currentModelMode;
+        const messageModel = resolveModelId(currentModelMode);
         logger.debug(`[loop] User message received with permission mode: ${currentPermissionMode}, model: ${currentModelMode}`);
 
         // Resolve custom system prompt - use message.meta.customSystemPrompt if provided, otherwise use current
@@ -314,7 +325,7 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
     try {
         await loop({
             path: workingDirectory,
-            model: options.model,
+            model: resolveModelId(options.model === 'sonnet' || options.model === 'opus' ? options.model : 'default'), // 'auto' → 'default' → undefined (no flag)
             permissionMode: options.permissionMode,
             startingMode,
             messageQueue,

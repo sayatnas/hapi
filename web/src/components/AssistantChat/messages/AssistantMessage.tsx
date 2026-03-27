@@ -32,12 +32,12 @@ export function HappyAssistantMessage() {
         return parts.length > 0 && parts.every((part) => part.type === 'tool-call')
     })
     const rootClass = toolOnly
-        ? 'py-1 min-w-0 max-w-full overflow-x-hidden'
-        : 'px-1 min-w-0 max-w-full overflow-x-hidden'
+        ? 'isolate py-1 min-w-0 max-w-full overflow-x-hidden'
+        : 'isolate px-1 min-w-0 max-w-full overflow-x-hidden'
 
     if (isCliOutput) {
         return (
-            <MessagePrimitive.Root className="px-1 min-w-0 max-w-full overflow-x-hidden">
+            <MessagePrimitive.Root className="isolate px-1 min-w-0 max-w-full overflow-x-hidden">
                 <CliOutputBlock text={cliText} />
             </MessagePrimitive.Root>
         )

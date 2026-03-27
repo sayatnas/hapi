@@ -9,7 +9,7 @@ import { formatClaudeMessageForInk } from "@/ui/messageFormatterInk";
 import { logger } from "@/ui/logger";
 import { SDKToLogConverter } from "./utils/sdkToLogConverter";
 import { PLAN_FAKE_REJECT } from "./sdk/prompts";
-import { EnhancedMode } from "./loop";
+import { EnhancedMode, PermissionMode } from "./loop";
 import { OutgoingMessageQueue } from "./utils/OutgoingMessageQueue";
 import type { ClaudePermissionMode } from "@hapi/protocol/types";
 import {
@@ -255,7 +255,7 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                 let umessage = message as SDKAssistantMessage;
                 if (umessage.message.content && Array.isArray(umessage.message.content)) {
                     for (let c of umessage.message.content) {
-                        if (c.type === 'tool_use' && c.name === 'Task' && c.input && typeof (c.input as any).prompt === 'string') {
+                        if (c.type === 'tool_use' && (c.name === 'Task' || c.name === 'Agent') && c.input && typeof (c.input as any).prompt === 'string') {
                             const logMessage2 = sdkToLogConverter.convertSidechainUserMessage(c.id!, (c.input as any).prompt);
                             if (logMessage2) {
                                 messageQueue.enqueue(logMessage2);
@@ -273,6 +273,13 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
             } | null = null;
 
             let previousSessionId: string | null = null;
+            // Track if we need to temporarily downgrade YOLO mode after abort
+            // YOLO mode (bypassPermissions/dangerouslySkipPermissions) can fail on the
+            // first message after abort because the fresh Claude process hasn't fully
+            // initialized. We temporarily use 'acceptEdits' for the first message, then
+            // restore the original mode once the session is established.
+            let downgradeYoloForFirstMessage = false;
+            let originalYoloMode: string | null = null;
             while (!this.exitReason) {
                 logger.debug('[remote]: launch');
                 messageBuffer.addMessage('═'.repeat(40), 'status');
@@ -320,12 +327,21 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                             return permissionHandler.isAborted(toolCallId);
                         },
                         nextMessage: async () => {
-                            logger.debug(`[remote] nextMessage called - pending=${!!pending}, queueSize=${session.queue.size()}`);
+                            logger.debug(`[remote] nextMessage called - pending=${!!pending}, queueSize=${session.queue.size()}, downgradeYolo=${downgradeYoloForFirstMessage}`);
 
                             if (pending) {
                                 let p = pending;
                                 pending = null;
                                 logger.debug(`[remote] nextMessage returning pending message`);
+                                // Apply YOLO downgrade if needed
+                                if (downgradeYoloForFirstMessage && originalYoloMode) {
+                                    logger.debug(`[remote] Downgrading YOLO mode to acceptEdits for first message after abort`);
+                                    p = {
+                                        ...p,
+                                        mode: { ...p.mode, permissionMode: 'acceptEdits' as PermissionMode }
+                                    };
+                                    downgradeYoloForFirstMessage = false;
+                                }
                                 permissionHandler.handleModeChange(p.mode.permissionMode);
                                 return p;
                             }
@@ -342,6 +358,19 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                                 }
                                 modeHash = msg.hash;
                                 mode = msg.mode;
+
+                                // Apply YOLO downgrade if needed for first message after abort
+                                if (downgradeYoloForFirstMessage && originalYoloMode) {
+                                    logger.debug(`[remote] Downgrading YOLO mode to acceptEdits for first message after abort`);
+                                    const downgradedMode: EnhancedMode = { ...msg.mode, permissionMode: 'acceptEdits' as PermissionMode };
+                                    downgradeYoloForFirstMessage = false;
+                                    permissionHandler.handleModeChange(downgradedMode.permissionMode);
+                                    return {
+                                        message: msg.message,
+                                        mode: downgradedMode
+                                    };
+                                }
+
                                 permissionHandler.handleModeChange(mode.permissionMode);
                                 logger.debug(`[remote] nextMessage returning message`);
                                 return {
@@ -397,6 +426,20 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                             session.clearSessionId();
                         },
                         onReady: () => {
+                            // Restore YOLO mode after the first successful result
+                            // The first message was sent with acceptEdits for safety,
+                            // now that the session is established, restore the original mode
+                            if (originalYoloMode) {
+                                logger.debug(`[remote] Session established, restoring permission mode to ${originalYoloMode}`);
+                                if (mode) {
+                                    mode = { ...mode, permissionMode: originalYoloMode as PermissionMode };
+                                }
+                                permissionHandler.handleModeChange(originalYoloMode as PermissionMode);
+                                originalYoloMode = null;
+                            }
+                            // Backfill any messages that may have been dropped by Socket.IO
+                            // during thinking (socket stays connected but messages silently lost)
+                            void session.client.backfillAfterTurn();
                             if (!pending && session.queue.size() === 0) {
                                 session.client.sendSessionEvent({ type: 'ready' });
                             }
@@ -420,15 +463,17 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
 
                     if (!this.exitReason && controller.signal.aborted) {
                         session.client.sendSessionEvent({ type: 'message', message: 'Aborted by user' });
-                        // Clear the Claude session ID so next request starts fresh
-                        // This prevents issues with resuming a session that was aborted mid-way
-                        // (especially important for YOLO mode which doesn't handle corrupt sessions well)
-                        session.clearSessionId();
-                        // Request Hub to build full conversation history for context injection
-                        // Wait for completion to ensure context is available for next spawn
-                        await session.requestContextRecovery();
-                        // Send ready event so frontend knows we can accept new messages
-                        // Note: onThinkingChange(false) was already called in claudeRemote's finally block
+                        // Keep session ID so next spawn can --resume with full Claude context.
+                        // claudeCheckSession() in claudeRemote.ts will validate the session file;
+                        // if invalid, it falls back to null (fresh session + context recovery).
+                        logger.debug(`[remote]: Abort - keeping session ID ${session.sessionId} for resume`);
+                        // If we were in YOLO mode, downgrade first message to acceptEdits
+                        // to avoid process crash on fresh session spawn
+                        if (mode && (mode.permissionMode === 'bypassPermissions' || mode.permissionMode === 'dangerouslySkipPermissions')) {
+                            originalYoloMode = mode.permissionMode;
+                            downgradeYoloForFirstMessage = true;
+                            logger.debug(`[remote]: YOLO mode abort - will downgrade first message to acceptEdits, then restore ${originalYoloMode}`);
+                        }
                         if (!pending && session.queue.size() === 0) {
                             session.client.sendSessionEvent({ type: 'ready' });
                         }
@@ -436,13 +481,13 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                 } catch (e) {
                     // AbortError is expected when user aborts - don't show error message
                     if (e instanceof AbortError) {
-                        logger.debug('[remote]: AbortError caught (expected)');
-                        // Clear the Claude session ID so next request starts fresh
-                        session.clearSessionId();
-                        // Request Hub to build full conversation history for context injection
-                        // Wait for completion to ensure context is available for next spawn
-                        await session.requestContextRecovery();
-                        // Send ready event so frontend knows we can accept new messages
+                        logger.debug(`[remote]: AbortError caught (expected) - keeping session ID ${session.sessionId} for resume`);
+                        // If we were in YOLO mode, downgrade first message to acceptEdits
+                        if (mode && (mode.permissionMode === 'bypassPermissions' || mode.permissionMode === 'dangerouslySkipPermissions')) {
+                            originalYoloMode = mode.permissionMode;
+                            downgradeYoloForFirstMessage = true;
+                            logger.debug(`[remote]: YOLO mode abort - will downgrade first message to acceptEdits, then restore ${originalYoloMode}`);
+                        }
                         session.client.sendSessionEvent({ type: 'ready' });
                         continue;
                     }
@@ -450,12 +495,13 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                     // If we get a non-AbortError after abort (e.g., process exit code 1),
                     // clear the session ID and request context recovery, then retry silently
                     if (controller.signal.aborted) {
-                        logger.debug('[remote]: Non-AbortError after abort, clearing session ID and requesting context recovery');
-                        session.clearSessionId();
-                        // Request Hub to build full conversation history for context injection
-                        // Wait for completion to ensure context is available for next spawn
-                        await session.requestContextRecovery();
-                        // Send ready event so frontend knows we can accept new messages
+                        logger.debug(`[remote]: Non-AbortError after abort - keeping session ID ${session.sessionId} for resume`);
+                        // If we were in YOLO mode, downgrade first message to acceptEdits
+                        if (mode && (mode.permissionMode === 'bypassPermissions' || mode.permissionMode === 'dangerouslySkipPermissions')) {
+                            originalYoloMode = mode.permissionMode;
+                            downgradeYoloForFirstMessage = true;
+                            logger.debug(`[remote]: YOLO mode abort - will downgrade first message to acceptEdits, then restore ${originalYoloMode}`);
+                        }
                         if (!pending && session.queue.size() === 0) {
                             session.client.sendSessionEvent({ type: 'ready' });
                         }
@@ -469,10 +515,31 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                         logger.debug('[remote]: error stack:', errorStack);
                     }
                     if (!this.exitReason && !controller.signal.aborted) {
-                        session.client.sendSessionEvent({ type: 'message', message: `Process exited unexpectedly: ${errorMessage}` });
+                        // Detect root/sudo permission crash and auto-downgrade to prevent death loop
+                        // When Claude Code rejects --dangerously-skip-permissions under root,
+                        // every subsequent message would crash with the same error.
+                        const isRootPermissionCrash = errorMessage.includes('dangerously-skip-permissions')
+                            && (errorMessage.includes('root') || errorMessage.includes('sudo'));
+                        if (isRootPermissionCrash && mode) {
+                            logger.debug('[remote]: Root/sudo permission crash detected - downgrading to acceptEdits');
+                            mode = { ...mode, permissionMode: 'acceptEdits' as PermissionMode };
+                            permissionHandler.handleModeChange('acceptEdits' as PermissionMode);
+                            session.client.sendSessionEvent({
+                                type: 'message',
+                                message: 'Cannot use Yolo mode as root/sudo. Automatically downgraded to Accept Edits mode. Send your message again to continue.'
+                            });
+                        } else {
+                            session.client.sendSessionEvent({ type: 'message', message: `Process exited unexpectedly: ${errorMessage}` });
+                        }
                         // Clear session ID on error so next spawn starts fresh
                         // The context recovery will happen automatically at the start of the next iteration
                         session.clearSessionId();
+                        // Send ready event so the UI re-enables input after the crash.
+                        // Without this, the web UI stays in "running" state and the user
+                        // can't interact with the session.
+                        if (!pending && session.queue.size() === 0) {
+                            session.client.sendSessionEvent({ type: 'ready' });
+                        }
                         continue;
                     }
                 } finally {

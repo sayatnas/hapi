@@ -621,6 +621,75 @@ if (message.type === 'result') {
 - No message loss - queue is only emptied when we're ready to process
 - Predictable behavior - all queued messages processed together after Claude finishes
 
+### 12. Message Ordering Fix (Terminal/Plan Cards Out of Order)
+
+**Problem**: Special message types like terminal output dialogs and plan mode cards would sometimes render below newer messages in the chat, appearing out of chronological order.
+
+**Root Cause**: The `compareMessages()` sorting function in the frontend only used embedded timestamps when **both** messages being compared had them. Agent/CLI messages carry an embedded timestamp (the actual creation time from Claude Code), but web UI user messages and some system messages don't. When comparing a message WITH an embedded timestamp against one WITHOUT, the sort fell through to `seq` (database insertion order). If the hub stored messages slightly out of order relative to their actual creation time (e.g., due to network latency or batching), the `seq` fallback produced wrong ordering.
+
+**File Modified:**
+- `web/src/lib/messages.ts` - `compareMessages()` function
+
+**Fix**: Instead of requiring both messages to have embedded timestamps, use embedded timestamp when available and fall back to `createdAt` for the primary sort. This puts all messages on the same timescale:
+
+```typescript
+// Before: only compared when BOTH had embedded timestamps
+const aEmbedded = getEmbeddedTimestamp(a)
+const bEmbedded = getEmbeddedTimestamp(b)
+if (aEmbedded !== null && bEmbedded !== null && aEmbedded !== bEmbedded) {
+    return aEmbedded - bEmbedded
+}
+// ...fell through to seq, then createdAt
+
+// After: always compare on the best available time
+const aTime = getEmbeddedTimestamp(a) ?? a.createdAt
+const bTime = getEmbeddedTimestamp(b) ?? b.createdAt
+if (aTime !== bTime) {
+    return aTime - bTime
+}
+// ...seq as tiebreaker only
+```
+
+### 13. Rewind Always Restores Context
+
+**Problem**: After rewinding, Claude had no memory of the conversation because context injection was only happening when crossing a compaction boundary. But since rewind archives the session and starts a fresh Claude session, context is ALWAYS needed.
+
+**File**: `hub/src/sync/syncEngine.ts`
+
+**Fix**: Changed `rewindSession()` to always build full conversation history (not just when crossing compaction):
+```typescript
+// Before: only built context when crossing compaction
+if (crossedCompaction) {
+    contextSummary = this.messageService.buildFullConversationHistory(sessionId, targetSeq)
+}
+
+// After: always build context since the session is archived and starts fresh
+const contextSummary = this.messageService.buildFullConversationHistory(sessionId, targetSeq) || undefined
+```
+
+### 14. YOLO Mode Safety After Abort
+
+**Problem**: After aborting in YOLO mode (`bypassPermissions` or `dangerouslySkipPermissions`), the next message sent would also use YOLO mode. But fresh Claude sessions can fail to spawn properly in YOLO mode, causing "Process exited unexpectedly" errors.
+
+**File**: `cli/src/claude/claudeRemoteLauncher.ts`
+
+**Fix**: After abort in YOLO mode, temporarily downgrade the first message to `acceptEdits` mode, then restore the original YOLO mode once the session is established:
+
+1. **On abort**: If mode was YOLO, set `downgradeYoloForFirstMessage = true` and save `originalYoloMode`
+2. **On first message**: Override the mode to `acceptEdits` instead of the YOLO mode
+3. **On session ready** (after first successful result): Restore `originalYoloMode`
+
+This ensures the fresh Claude process spawns successfully with `acceptEdits`, then seamlessly switches back to YOLO mode for subsequent messages.
+
+**Flow:**
+```
+User in YOLO mode → Aborts → Session ID cleared
+→ Next message arrives → Mode downgraded to acceptEdits
+→ Claude spawns successfully with acceptEdits
+→ First result received → Mode restored to original YOLO
+→ Subsequent messages use YOLO mode as expected
+```
+
 ## Operational Procedures
 
 ### Killing Stuck Processes

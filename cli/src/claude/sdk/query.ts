@@ -241,6 +241,31 @@ export class Query implements AsyncIterableIterator<SDKMessage> {
     }
 
     /**
+     * Returns a promise that resolves when a new message is available from stdout.
+     * Resolves immediately if there are already buffered messages or the stream has ended.
+     * Used to detect background task notifications while waiting for user input.
+     */
+    waitForNewMessage(): Promise<void> {
+        if (this.inputStream.pendingCount > 0 || this.inputStream.isFinished) {
+            return Promise.resolve()
+        }
+        return new Promise(resolve => {
+            this.inputStream.setOnNotify(() => {
+                this.inputStream.setOnNotify(null)
+                resolve()
+            })
+        })
+    }
+
+    /**
+     * Clean up the notification listener set by waitForNewMessage.
+     * Call when the wait is no longer needed (e.g., user input arrived first).
+     */
+    cancelWaitForNewMessage(): void {
+        this.inputStream.setOnNotify(null)
+    }
+
+    /**
      * Cleanup method to abort all pending control requests
      */
     private cleanupControllers(): void {
@@ -290,14 +315,28 @@ export function query(config: {
     const args = ['--output-format', 'stream-json', '--verbose']
     let cleanupMcpConfig: (() => void) | null = null
 
+    // System prompts are CLI args — recovery context now goes via stdin (no ARG_MAX concern).
+    // Only the base system prompt (~2-5KB) is passed here.
     if (customSystemPrompt) args.push('--system-prompt', stripNewlinesForWindowsShellArg(customSystemPrompt))
     if (appendSystemPrompt) args.push('--append-system-prompt', stripNewlinesForWindowsShellArg(appendSystemPrompt))
     if (maxTurns) args.push('--max-turns', maxTurns.toString())
     if (model) args.push('--model', model)
-    // Only add permission prompt tool if NOT in dangerouslySkipPermissions mode
-    // In dangerouslySkipPermissions mode, Claude Code skips ALL permission prompts internally
-    // so we don't need the callback mechanism
-    if (canCallTool && permissionMode !== 'dangerouslySkipPermissions') {
+
+    // Detect root/sudo early - Claude Code rejects --dangerously-skip-permissions under root
+    const isRoot = (typeof process.getuid === 'function' && process.getuid() === 0)
+        || process.env.USER === 'root'
+        || process.env.EUID === '0'
+        || process.env.SUDO_USER !== undefined
+
+    // Determine if we can use native --dangerously-skip-permissions
+    // Only possible when NOT running as root AND permission mode is dangerouslySkipPermissions
+    const useNativeDangerousSkip = permissionMode === 'dangerouslySkipPermissions' && !isRoot
+
+    // Add permission prompt tool for canCallTool callback.
+    // Skip only when using native --dangerously-skip-permissions (Claude Code handles all permissions internally).
+    // When running as root with dangerouslySkipPermissions, we MUST register canCallTool
+    // because we fall back to default mode and rely on HAPI's callback for auto-approval.
+    if (canCallTool && !useNativeDangerousSkip) {
         if (typeof prompt === 'string') {
             throw new Error('canCallTool callback requires --input-format stream-json. Please set prompt as an AsyncIterable.')
         }
@@ -311,12 +350,13 @@ export function query(config: {
     if (additionalDirectories.length > 0) args.push('--add-dir', ...additionalDirectories)
     if (strictMcpConfig) args.push('--strict-mcp-config')
     if (permissionMode === 'dangerouslySkipPermissions') {
-        // Check if running as root - Claude Code refuses --dangerously-skip-permissions for security
-        // Fall back to bypassPermissions mode which auto-approves everything via HAPI's permission handler
-        if (process.getuid && process.getuid() === 0) {
-            logDebug('[SDK] Running as root - falling back from dangerouslySkipPermissions to bypassPermissions mode')
-            args.push('--permission-mode', 'bypassPermissions')
+        logDebug(`[SDK] dangerouslySkipPermissions check: isRoot=${isRoot}, getuid=${typeof process.getuid === 'function' ? process.getuid() : 'N/A'}, USER=${process.env.USER}`)
+        if (isRoot) {
+            // Running as root: Claude Code rejects --dangerously-skip-permissions and bypass modes.
+            // Fall back to default permission mode - HAPI's canCallTool callback handles auto-approval.
+            logDebug('[SDK] Running as root - using default permission mode with canCallTool fallback')
         } else {
+            // Not root: use --dangerously-skip-permissions directly for native Claude Code handling
             args.push('--dangerously-skip-permissions')
         }
     } else if (permissionMode) {
@@ -360,7 +400,22 @@ export function query(config: {
 
     // Spawn Claude Code process
     const spawnEnv = withBunRuntimeEnv(process.env, { allowBunBeBun: false })
-    logDebug(`Spawning Claude Code process: ${spawnCommand} ${spawnArgs.join(' ')}`)
+
+    // Always log total args+env size to diagnose E2BIG errors (ARG_MAX ~2MB on Linux)
+    const totalArgsBytes = spawnArgs.reduce((sum, a) => sum + Buffer.byteLength(a, 'utf8'), 0)
+    const totalEnvBytes = Object.entries(spawnEnv).reduce((sum, [k, v]) => sum + Buffer.byteLength(`${k}=${v ?? ''}`, 'utf8'), 0)
+    const combinedBytes = totalArgsBytes + totalEnvBytes
+    logger.debug(`[SDK] Spawn size: args=${totalArgsBytes} env=${totalEnvBytes} total=${combinedBytes} (ARG_MAX ~2097152)`)
+    for (const arg of spawnArgs) {
+        const sz = Buffer.byteLength(arg, 'utf8')
+        if (sz > 1024) {
+            logger.debug(`[SDK]   Large arg (${sz} bytes): ${arg.substring(0, 80)}...`)
+        }
+    }
+    if (combinedBytes > 1_500_000) {
+        logger.debug(`[SDK] WARNING: combined args+env (${combinedBytes}) approaching ARG_MAX!`)
+    }
+
     logDebug(`[SDK] Signal aborted state: ${config.options?.abort?.aborted ?? 'no signal'}`)
 
     const child = spawn(spawnCommand, spawnArgs, {

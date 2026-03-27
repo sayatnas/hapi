@@ -202,6 +202,7 @@ export class SessionCache {
         session.thinking = false
         session.thinkingAt = t
 
+        this.clearPendingRequests(session)
         this.publisher.emit({ type: 'session-updated', sessionId: session.id, data: { active: false, thinking: false } })
     }
 
@@ -213,7 +214,48 @@ export class SessionCache {
             if (now - session.activeAt <= sessionTimeoutMs) continue
             session.active = false
             session.thinking = false
+            this.clearPendingRequests(session)
             this.publisher.emit({ type: 'session-updated', sessionId: session.id, data: { active: false } })
+        }
+    }
+
+    /**
+     * Clear pending permission requests when a session goes inactive.
+     * Prevents stale "Allow/Deny" buttons that can never succeed because
+     * the CLI is disconnected.
+     */
+    private clearPendingRequests(session: Session): void {
+        const requests = session.agentState?.requests
+        if (!requests || Object.keys(requests).length === 0) return
+
+        // Move pending requests to completedRequests as canceled
+        const completed = { ...(session.agentState?.completedRequests ?? {}) }
+        for (const [id, request] of Object.entries(requests)) {
+            completed[id] = {
+                ...request,
+                status: 'canceled' as const,
+                reason: 'Session disconnected',
+                completedAt: Date.now()
+            }
+        }
+
+        const newAgentState = {
+            ...session.agentState,
+            requests: {},
+            completedRequests: completed
+        }
+
+        // Persist to database
+        const result = this.store.sessions.updateSessionAgentState(
+            session.id,
+            newAgentState,
+            session.agentStateVersion,
+            session.namespace
+        )
+
+        if (result.result === 'success') {
+            session.agentState = newAgentState
+            session.agentStateVersion = result.version
         }
     }
 

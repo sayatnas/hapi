@@ -76,7 +76,7 @@ function TaskStateIcon(props: { state: ToolCallBlock['tool']['state'] }) {
 }
 
 function getTaskSummaryChildren(block: ToolCallBlock): { visible: ToolCallBlock[]; remaining: number } | null {
-    if (block.tool.name !== 'Task') return null
+    if (block.tool.name !== 'Task' && block.tool.name !== 'Agent') return null
 
     const children = block.children
         .filter((child): child is ToolCallBlock => child.kind === 'tool-call')
@@ -143,11 +143,37 @@ function renderExitPlanModeInput(input: unknown): ReactNode | null {
     return <MarkdownRenderer content={plan} />
 }
 
+/**
+ * Parse MCP-style XML parameter strings into JSON objects.
+ * MCP tools send parameters as: `<parameter name="key">value</parameter>`
+ * This converts them to `{ key: value }` for clean display.
+ */
+function parseMcpXmlInput(input: unknown): Record<string, string> | null {
+    if (typeof input !== 'string') return null
+    const paramRegex = /<parameter\s+name="([^"]+)">([\s\S]*?)<\/parameter>/g
+    let match: RegExpExecArray | null
+    const params: Record<string, string> = {}
+    let found = false
+    while ((match = paramRegex.exec(input)) !== null) {
+        found = true
+        params[match[1]] = match[2]
+    }
+    return found ? params : null
+}
+
 function renderToolInput(block: ToolCallBlock): ReactNode {
     const toolName = block.tool.name
     const input = block.tool.input
 
-    if (toolName === 'Task' && isObject(input) && typeof input.prompt === 'string') {
+    // Handle MCP XML parameter strings — parse to JSON for clean display
+    if (typeof input === 'string') {
+        const parsed = parseMcpXmlInput(input)
+        if (parsed) {
+            return <CodeBlock code={JSON.stringify(parsed, null, 2)} language="json" />
+        }
+    }
+
+    if ((toolName === 'Task' || toolName === 'Agent') && isObject(input) && typeof input.prompt === 'string') {
         return <MarkdownRenderer content={input.prompt} />
     }
 

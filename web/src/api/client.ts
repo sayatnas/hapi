@@ -116,7 +116,17 @@ export class ApiClient {
 
         if (!res.ok) {
             const body = await res.text().catch(() => '')
-            throw new Error(`HTTP ${res.status} ${res.statusText}: ${body}`)
+            // Try to extract a human-readable error from JSON response bodies
+            let detail = body
+            try {
+                const parsed = JSON.parse(body)
+                if (parsed && typeof parsed.error === 'string') {
+                    detail = parsed.error
+                }
+            } catch {
+                // Not JSON, use raw body
+            }
+            throw new Error(`HTTP ${res.status}: ${detail || res.statusText}`)
         }
 
         return await res.json() as T

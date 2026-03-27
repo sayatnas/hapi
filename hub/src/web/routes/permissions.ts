@@ -64,7 +64,13 @@ export function createPermissionsRoutes(getSyncEngine: () => SyncEngine | null):
         const allowTools = parsed.data.allowTools
         const decision = parsed.data.decision
         const answers = parsed.data.answers
-        await engine.approvePermission(sessionId, requestId, mode, allowTools, decision, answers)
+        try {
+            await engine.approvePermission(sessionId, requestId, mode, allowTools, decision, answers)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            console.error(`[permissions] Failed to approve ${requestId}: ${message}`)
+            return c.json({ error: `Failed to send approval: ${message}` }, 502)
+        }
         return c.json({ ok: true })
     })
 
@@ -93,7 +99,13 @@ export function createPermissionsRoutes(getSyncEngine: () => SyncEngine | null):
             return c.json({ error: 'Invalid body' }, 400)
         }
 
-        await engine.denyPermission(sessionId, requestId, parsed.data.decision)
+        try {
+            await engine.denyPermission(sessionId, requestId, parsed.data.decision)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            console.error(`[permissions] Failed to deny ${requestId}: ${message}`)
+            return c.json({ error: `Failed to send denial: ${message}` }, 502)
+        }
         return c.json({ ok: true })
     })
 

@@ -14,8 +14,32 @@ export class Stream<T> implements AsyncIterableIterator<T> {
     private isDone = false
     private hasError?: Error
     private started = false
+    private _onNotify?: () => void
 
     constructor(private returned?: () => void) {}
+
+    /**
+     * Set a notification callback that fires when data becomes available,
+     * the stream ends, or an error occurs. Used to detect background task
+     * notifications arriving while waiting for user input.
+     */
+    setOnNotify(cb: (() => void) | null): void {
+        this._onNotify = cb ?? undefined
+    }
+
+    /**
+     * Number of buffered items not yet consumed by the iterator
+     */
+    get pendingCount(): number {
+        return this.queue.length
+    }
+
+    /**
+     * Whether the stream has finished (done or errored)
+     */
+    get isFinished(): boolean {
+        return this.isDone || !!this.hasError
+    }
 
     /**
      * Implements async iterable protocol
@@ -70,6 +94,7 @@ export class Stream<T> implements AsyncIterableIterator<T> {
             // Queue for later consumption
             this.queue.push(value)
         }
+        this._onNotify?.()
     }
 
     /**
@@ -83,6 +108,7 @@ export class Stream<T> implements AsyncIterableIterator<T> {
             this.readReject = undefined
             resolve({ done: true, value: undefined })
         }
+        this._onNotify?.()
     }
 
     /**
@@ -96,6 +122,7 @@ export class Stream<T> implements AsyncIterableIterator<T> {
             this.readReject = undefined
             reject(error)
         }
+        this._onNotify?.()
     }
 
     /**

@@ -339,7 +339,7 @@ export async function startRunner(): Promise<void> {
             }
         }
         args.push('--hapi-starting-mode', 'remote', '--started-by', 'runner');
-        if (options.model && agent !== 'opencode') {
+        if (options.model && options.model !== 'auto' && agent !== 'opencode') {
           args.push('--model', options.model);
         }
         if (yolo) {

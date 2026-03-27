@@ -11,6 +11,13 @@ type PendingUploadAttachment = PendingAttachment & {
     previewUrl?: string
 }
 
+function generateId(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID()
+    }
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 export function createAttachmentAdapter(api: ApiClient, sessionId: string): AttachmentAdapter {
     const cancelledAttachmentIds = new Set<string>()
 
@@ -24,16 +31,22 @@ export function createAttachmentAdapter(api: ApiClient, sessionId: string): Atta
     }
 
     return {
-        accept: '*/*',
+        // 'image/*' triggers iOS Photos picker directly and auto-converts HEIC→JPEG with proper
+        // file.type. '*/*' on iOS gives raw HEIC with empty file.type, breaking preview/MIME detection.
+        accept: 'image/*',
 
         async *add({ file }): AsyncGenerator<PendingAttachment> {
-            const id = crypto.randomUUID()
+            const id = generateId()
             const contentType = file.type || 'application/octet-stream'
+            // iOS Photos app can return an empty file.name — generate a fallback so hub
+            // validation (filename: z.string().min(1)) doesn't reject with 400.
+            const ext = contentType.split('/')[1]?.replace('jpeg', 'jpg') ?? 'bin'
+            const safeName = file.name || `upload_${Date.now()}.${ext}`
 
             yield {
                 id,
                 type: 'file',
-                name: file.name,
+                name: safeName,
                 contentType,
                 file,
                 status: { type: 'running', reason: 'uploading', progress: 0 }
@@ -48,7 +61,7 @@ export function createAttachmentAdapter(api: ApiClient, sessionId: string): Atta
                     yield {
                         id,
                         type: 'file',
-                        name: file.name,
+                        name: safeName,
                         contentType,
                         file,
                         status: { type: 'incomplete', reason: 'error' }
@@ -64,13 +77,13 @@ export function createAttachmentAdapter(api: ApiClient, sessionId: string): Atta
                 yield {
                     id,
                     type: 'file',
-                    name: file.name,
+                    name: safeName,
                     contentType,
                     file,
                     status: { type: 'running', reason: 'uploading', progress: 50 }
                 }
 
-                const result = await api.uploadFile(sessionId, file.name, content, contentType)
+                const result = await api.uploadFile(sessionId, safeName, content, contentType)
                 if (cancelledAttachmentIds.has(id)) {
                     if (result.success && result.path) {
                         await deleteUpload(result.path)
@@ -82,7 +95,7 @@ export function createAttachmentAdapter(api: ApiClient, sessionId: string): Atta
                     yield {
                         id,
                         type: 'file',
-                        name: file.name,
+                        name: safeName,
                         contentType,
                         file,
                         status: { type: 'incomplete', reason: 'error' }
@@ -99,7 +112,7 @@ export function createAttachmentAdapter(api: ApiClient, sessionId: string): Atta
                 yield {
                     id,
                     type: 'file',
-                    name: file.name,
+                    name: safeName,
                     contentType,
                     file,
                     status: { type: 'requires-action', reason: 'composer-send' },
@@ -110,7 +123,7 @@ export function createAttachmentAdapter(api: ApiClient, sessionId: string): Atta
                 yield {
                     id,
                     type: 'file',
-                    name: file.name,
+                    name: safeName,
                     contentType,
                     file,
                     status: { type: 'incomplete', reason: 'error' }

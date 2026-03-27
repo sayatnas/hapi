@@ -79,8 +79,8 @@ export class ApiSessionClient extends EventEmitter {
             path: '/socket.io/',
             reconnection: true,
             reconnectionAttempts: Infinity,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
+            reconnectionDelay: 2000,       // 2s initial delay (was 1s — too aggressive)
+            reconnectionDelayMax: 10000,    // 10s max backoff (was 5s)
             transports: ['websocket'],
             autoConnect: false
         })
@@ -246,6 +246,20 @@ export class ApiSessionClient extends EventEmitter {
 
         logger.debug(`[API] handleIncomingMessage: Not a UserMessage, emitting as generic message`)
         this.emit('message', message.content)
+    }
+
+    /**
+     * Trigger a backfill check after a Claude turn completes.
+     * Catches messages silently dropped by Socket.IO during thinking
+     * (socket stays connected but individual messages lost).
+     */
+    async backfillAfterTurn(): Promise<void> {
+        if (this.lastSeenMessageSeq === null) return
+        try {
+            await this.backfillMessages()
+        } catch (error) {
+            logger.debug('[API] backfillAfterTurn failed', error)
+        }
     }
 
     private async backfillIfNeeded(): Promise<void> {

@@ -494,12 +494,10 @@ export class SyncEngine {
             const compactionBoundaries = this.messageService.findCompactionBoundaries(sessionId)
             const crossedCompaction = compactionBoundaries.some(boundary => boundary > targetSeq)
 
-            // If crossing compaction, build full conversation history from messages before the rewind point
-            // Using full history instead of summary to preserve complete context
-            let contextSummary: string | undefined
-            if (crossedCompaction) {
-                contextSummary = this.messageService.buildFullConversationHistory(sessionId, targetSeq)
-            }
+            // Always build full conversation history for context injection
+            // Since rewind archives the session and starts a new Claude session,
+            // the new session has no memory of the conversation without this
+            const contextSummary = this.messageService.buildFullConversationHistory(sessionId, targetSeq) || undefined
 
             // Archive the session first (kills the running CLI process and marks inactive)
             // This preserves the pre-rewind state and ensures a clean restart
@@ -516,12 +514,8 @@ export class SyncEngine {
             await this.sessionCache.clearClaudeSessionId(sessionId)
 
             // Store context summary in metadata for CLI to use when resuming
-            if (contextSummary) {
-                await this.sessionCache.setRewindContextSummary(sessionId, contextSummary)
-            } else {
-                // Clear any previous context summary
-                await this.sessionCache.setRewindContextSummary(sessionId, undefined)
-            }
+            // Always store (or clear) to ensure the next session spawn has proper context
+            await this.sessionCache.setRewindContextSummary(sessionId, contextSummary)
 
             // Emit rewind event to notify clients
             this.eventPublisher.emit({
