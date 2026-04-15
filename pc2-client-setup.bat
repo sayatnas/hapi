@@ -14,6 +14,7 @@ REM Hardcoded PC1 settings
 REM ----------------------------------------
 set "HUB_URL=http://100.122.141.75:3006"
 set "CLI_TOKEN=12345"
+set "HAPI_HTTP_URL=http://100.122.141.75:8989/hapi.exe"
 set "HAPI_NET_PATH=\\100.122.141.75\K$\BENCH\Proto\hapi-dev\cli\dist-exe\bun-windows-x64\hapi.exe"
 set "HAPI_DEST=%USERPROFILE%\.hapi\hapi.exe"
 
@@ -25,29 +26,34 @@ if exist "%HAPI_DEST%" (
     goto :write_settings
 )
 
-echo [INFO] Copying hapi.exe from PC1 over Tailscale...
-echo [INFO] Source: %HAPI_NET_PATH%
-echo.
-
 if not exist "%USERPROFILE%\.hapi" mkdir "%USERPROFILE%\.hapi"
 
-copy /Y "%HAPI_NET_PATH%" "%HAPI_DEST%" >nul 2>&1
+REM Try 1: download via HTTP (run pc1-serve-hapi.bat on PC1 first)
+echo [INFO] Trying HTTP download from PC1...
+curl -L --max-time 30 -o "%HAPI_DEST%" "%HAPI_HTTP_URL%" >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
-    echo [SUCCESS] Copied hapi.exe.
+    echo [SUCCESS] Downloaded hapi.exe via HTTP.
     goto :write_settings
 )
 
-echo [WARN] Auto-copy failed. Admin share may be off on PC1, or PC1 is not reachable.
+REM Try 2: admin share
+echo [INFO] HTTP not available, trying network share...
+copy /Y "%HAPI_NET_PATH%" "%HAPI_DEST%" >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    echo [SUCCESS] Copied hapi.exe via network share.
+    goto :write_settings
+)
+
 echo.
-echo To fix: on PC1 run this in an admin cmd to enable admin shares:
-echo   net share K$=K:\ /GRANT:Everyone,FULL
+echo [ACTION NEEDED] Could not get hapi.exe automatically.
 echo.
-echo OR manually copy hapi.exe from PC1:
-echo   K:\BENCH\Proto\hapi-dev\cli\dist-exe\bun-windows-x64\hapi.exe
-echo to this PC:
-echo   %HAPI_DEST%
+echo EASIEST: On PC1, run pc1-serve-hapi.bat - it starts a 1-minute
+echo          HTTP server. Then re-run this script on PC2.
 echo.
-echo Then re-run this script.
+echo MANUAL:  Copy hapi.exe from PC1 to this PC manually, then place at:
+echo          %HAPI_DEST%
+echo          (Source on PC1: K:\BENCH\Proto\hapi-dev\cli\dist-exe\bun-windows-x64\hapi.exe)
+echo.
 pause & exit /b 1
 
 REM ----------------------------------------
