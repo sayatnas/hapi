@@ -14,6 +14,10 @@ REM Hardcoded PC1 settings
 REM ----------------------------------------
 set "HUB_URL=http://100.122.141.75:3006"
 set "CLI_TOKEN=12345"
+
+REM Set env vars so hapi.exe uses these regardless of settings file
+set "HAPI_API_URL=http://100.122.141.75:3006"
+set "CLI_API_TOKEN=12345"
 set "HAPI_HTTP_URL=http://100.122.141.75:8989/hapi.exe"
 set "HAPI_NET_PATH=\\100.122.141.75\K$\BENCH\Proto\hapi-dev\cli\dist-exe\bun-windows-x64\hapi.exe"
 set "HAPI_DEST=%USERPROFILE%\.hapi\hapi.exe"
@@ -74,18 +78,10 @@ echo [SUCCESS] Settings written.
 echo.
 
 REM ----------------------------------------
-REM Step 3: Test connection
+REM Step 3: Show connection info
 REM ----------------------------------------
-echo [INFO] Testing connection to hub at %HUB_URL% ...
+echo [INFO] Connection config:
 "%HAPI_DEST%" auth status
-if %ERRORLEVEL% NEQ 0 (
-    echo.
-    echo [WARN] Could not reach hub. Make sure:
-    echo   1. PC1 is on and HAPI server is running (dev-rebuild.bat was run)
-    echo   2. Tailscale is connected on both PCs
-    echo   3. Windows Firewall on PC1 allows port 3006
-    pause & exit /b 1
-)
 
 REM ----------------------------------------
 REM Step 4: Start runner
