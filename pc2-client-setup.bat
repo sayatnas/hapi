@@ -1,0 +1,104 @@
+@echo off
+setlocal EnableDelayedExpansion
+
+echo.
+echo ==========================================
+echo  HAPI PC2 Client Setup
+echo  Connecting to PC1 (Sayat's machine)
+echo  Hub: http://100.122.141.75:3006
+echo ==========================================
+echo.
+
+REM ----------------------------------------
+REM Hardcoded PC1 settings
+REM ----------------------------------------
+set "HUB_URL=http://100.122.141.75:3006"
+set "CLI_TOKEN=12345"
+set "HAPI_NET_PATH=\\100.122.141.75\K$\BENCH\Proto\hapi-dev\cli\dist-exe\bun-windows-x64\hapi.exe"
+set "HAPI_DEST=%USERPROFILE%\.hapi\hapi.exe"
+
+REM ----------------------------------------
+REM Step 1: Get hapi.exe
+REM ----------------------------------------
+if exist "%HAPI_DEST%" (
+    echo [INFO] hapi.exe already found at %HAPI_DEST% - skipping copy.
+    goto :write_settings
+)
+
+echo [INFO] Copying hapi.exe from PC1 over Tailscale...
+echo [INFO] Source: %HAPI_NET_PATH%
+echo.
+
+if not exist "%USERPROFILE%\.hapi" mkdir "%USERPROFILE%\.hapi"
+
+copy /Y "%HAPI_NET_PATH%" "%HAPI_DEST%" >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    echo [SUCCESS] Copied hapi.exe.
+    goto :write_settings
+)
+
+echo [WARN] Auto-copy failed. Admin share may be off on PC1, or PC1 is not reachable.
+echo.
+echo To fix: on PC1 run this in an admin cmd to enable admin shares:
+echo   net share K$=K:\ /GRANT:Everyone,FULL
+echo.
+echo OR manually copy hapi.exe from PC1:
+echo   K:\BENCH\Proto\hapi-dev\cli\dist-exe\bun-windows-x64\hapi.exe
+echo to this PC:
+echo   %HAPI_DEST%
+echo.
+echo Then re-run this script.
+pause & exit /b 1
+
+REM ----------------------------------------
+REM Step 2: Write ~/.hapi/settings.json
+REM ----------------------------------------
+:write_settings
+echo.
+echo [INFO] Writing settings to %USERPROFILE%\.hapi\settings.json ...
+
+(
+echo {
+echo   "apiUrl": "%HUB_URL%",
+echo   "cliApiToken": "%CLI_TOKEN%"
+echo }
+) > "%USERPROFILE%\.hapi\settings.json"
+
+echo [SUCCESS] Settings written.
+echo.
+
+REM ----------------------------------------
+REM Step 3: Test connection
+REM ----------------------------------------
+echo [INFO] Testing connection to hub at %HUB_URL% ...
+"%HAPI_DEST%" auth status
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo [WARN] Could not reach hub. Make sure:
+    echo   1. PC1 is on and HAPI server is running (dev-rebuild.bat was run)
+    echo   2. Tailscale is connected on both PCs
+    echo   3. Windows Firewall on PC1 allows port 3006
+    pause & exit /b 1
+)
+
+REM ----------------------------------------
+REM Step 4: Start runner
+REM ----------------------------------------
+echo.
+echo [INFO] Starting HAPI runner...
+"%HAPI_DEST%" runner start
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Runner failed to start. See output above.
+    pause & exit /b 1
+)
+
+echo.
+echo ==========================================
+echo  SUCCESS! This PC is now connected to
+echo  PC1's HAPI hub at %HUB_URL%
+echo  Open PC1's web UI to see sessions
+echo  from both machines.
+echo ==========================================
+echo.
+pause
+endlocal
