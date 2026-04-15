@@ -50,6 +50,13 @@ export const claudeCommand: CommandDefinition = {
                 }
                 options.model = model
                 unknownArgs.push('--model', model)
+            } else if (arg === '--effort') {
+                const thinkingLevel = args[++i]
+                if (!thinkingLevel) {
+                    throw new Error('Missing --effort value')
+                }
+                options.thinkingLevel = thinkingLevel
+                unknownArgs.push('--effort', thinkingLevel)
             } else if (arg === '--started-by') {
                 options.startedBy = args[++i] as 'runner' | 'terminal'
             } else {

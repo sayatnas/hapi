@@ -1,7 +1,7 @@
-import { getPermissionModeLabel, getPermissionModeTone, isPermissionModeAllowedForFlavor } from '@hapi/protocol'
+import { getPermissionModeLabel, getPermissionModeTone, getThinkingLevelLabel, isPermissionModeAllowedForFlavor } from '@hapi/protocol'
 import type { PermissionModeTone } from '@hapi/protocol'
 import { useMemo } from 'react'
-import type { AgentState, ModelMode, PermissionMode } from '@/types/api'
+import type { AgentState, ModelMode, PermissionMode, ThinkingLevel } from '@/types/api'
 import type { ConversationStatus } from '@/realtime/types'
 import { getContextBudgetTokens } from '@/chat/modelConfig'
 import { useTranslation } from '@/lib/use-translation'
@@ -107,6 +107,7 @@ export function StatusBar(props: {
     agentState: AgentState | null | undefined
     contextSize?: number
     modelMode?: ModelMode
+    thinkingLevel?: ThinkingLevel
     permissionMode?: PermissionMode
     agentFlavor?: string | null
     voiceStatus?: ConversationStatus
@@ -137,6 +138,9 @@ export function StatusBar(props: {
     const permissionModeLabel = displayPermissionMode ? getPermissionModeLabel(displayPermissionMode) : null
     const permissionModeTone = displayPermissionMode ? getPermissionModeTone(displayPermissionMode) : null
     const permissionModeColor = permissionModeTone ? PERMISSION_TONE_CLASSES[permissionModeTone] : 'text-[var(--app-hint)]'
+    const thinkingLevelLabel = props.agentFlavor === 'claude'
+        ? `${getThinkingLevelLabel(props.thinkingLevel ?? 'medium')} thinking`
+        : null
 
     return (
         <div className="flex items-center justify-between px-2 pb-1">
@@ -156,11 +160,18 @@ export function StatusBar(props: {
                 ) : null}
             </div>
 
-            {displayPermissionMode ? (
-                <span className={`text-xs ${permissionModeColor}`}>
-                    {permissionModeLabel}
-                </span>
-            ) : null}
+            <div className="flex items-center gap-3">
+                {thinkingLevelLabel ? (
+                    <span className="text-xs text-[var(--app-hint)]">
+                        {thinkingLevelLabel}
+                    </span>
+                ) : null}
+                {displayPermissionMode ? (
+                    <span className={`text-xs ${permissionModeColor}`}>
+                        {permissionModeLabel}
+                    </span>
+                ) : null}
+            </div>
         </div>
     )
 }

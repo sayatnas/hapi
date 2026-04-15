@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { isPermissionModeAllowedForFlavor } from '@hapi/protocol'
+import { isPermissionModeAllowedForFlavor, isThinkingLevelAllowedForModel } from '@hapi/protocol'
 import type { ApiClient } from '@/api/client'
-import type { ModelMode, PermissionMode } from '@/types/api'
+import type { ModelMode, PermissionMode, ThinkingLevel } from '@/types/api'
 import { queryKeys } from '@/lib/query-keys'
 import { clearMessageWindow } from '@/lib/message-window-store'
 import { isKnownFlavor } from '@/lib/agentFlavorUtils'
@@ -16,6 +16,7 @@ export function useSessionActions(
     switchSession: () => Promise<void>
     setPermissionMode: (mode: PermissionMode) => Promise<void>
     setModelMode: (mode: ModelMode) => Promise<void>
+    setThinkingLevel: (thinkingLevel: ThinkingLevel, modelMode?: ModelMode) => Promise<void>
     renameSession: (name: string) => Promise<void>
     deleteSession: () => Promise<void>
     isPending: boolean
@@ -81,6 +82,19 @@ export function useSessionActions(
         onSuccess: () => void invalidateSession(),
     })
 
+    const thinkingMutation = useMutation({
+        mutationFn: async ({ thinkingLevel, modelMode }: { thinkingLevel: ThinkingLevel; modelMode?: ModelMode }) => {
+            if (!api || !sessionId) {
+                throw new Error('Session unavailable')
+            }
+            if (!isThinkingLevelAllowedForModel(thinkingLevel, modelMode ?? 'default')) {
+                throw new Error('Thinking level is not supported for the selected model')
+            }
+            await api.setThinkingLevel(sessionId, thinkingLevel)
+        },
+        onSuccess: () => void invalidateSession(),
+    })
+
     const renameMutation = useMutation({
         mutationFn: async (name: string) => {
             if (!api || !sessionId) {
@@ -112,6 +126,7 @@ export function useSessionActions(
         switchSession: switchMutation.mutateAsync,
         setPermissionMode: permissionMutation.mutateAsync,
         setModelMode: modelMutation.mutateAsync,
+        setThinkingLevel: (thinkingLevel, modelMode) => thinkingMutation.mutateAsync({ thinkingLevel, modelMode }),
         renameSession: renameMutation.mutateAsync,
         deleteSession: deleteMutation.mutateAsync,
         isPending: abortMutation.isPending
@@ -119,6 +134,7 @@ export function useSessionActions(
             || switchMutation.isPending
             || permissionMutation.isPending
             || modelMutation.isPending
+            || thinkingMutation.isPending
             || renameMutation.isPending
             || deleteMutation.isPending,
     }

@@ -301,6 +301,7 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                 this.abortFuture = new Future<void>();
                 let modeHash: string | null = null;
                 let mode: EnhancedMode | null = null;
+                const getCurrentMode = (): EnhancedMode | null => mode;
 
                 // If starting fresh (no Claude session ID) and no rewind context available,
                 // request context recovery to preserve conversation history
@@ -431,8 +432,9 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                             // now that the session is established, restore the original mode
                             if (originalYoloMode) {
                                 logger.debug(`[remote] Session established, restoring permission mode to ${originalYoloMode}`);
-                                if (mode) {
-                                    mode = { ...mode, permissionMode: originalYoloMode as PermissionMode };
+                                const currentMode = getCurrentMode();
+                                if (currentMode) {
+                                    mode = { ...currentMode, permissionMode: originalYoloMode as PermissionMode };
                                 }
                                 permissionHandler.handleModeChange(originalYoloMode as PermissionMode);
                                 originalYoloMode = null;
@@ -469,8 +471,9 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                         logger.debug(`[remote]: Abort - keeping session ID ${session.sessionId} for resume`);
                         // If we were in YOLO mode, downgrade first message to acceptEdits
                         // to avoid process crash on fresh session spawn
-                        if (mode && (mode.permissionMode === 'bypassPermissions' || mode.permissionMode === 'dangerouslySkipPermissions')) {
-                            originalYoloMode = mode.permissionMode;
+                        const currentMode = getCurrentMode();
+                        if (currentMode && (currentMode.permissionMode === 'bypassPermissions' || currentMode.permissionMode === 'dangerouslySkipPermissions')) {
+                            originalYoloMode = currentMode.permissionMode;
                             downgradeYoloForFirstMessage = true;
                             logger.debug(`[remote]: YOLO mode abort - will downgrade first message to acceptEdits, then restore ${originalYoloMode}`);
                         }
@@ -483,8 +486,9 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                     if (e instanceof AbortError) {
                         logger.debug(`[remote]: AbortError caught (expected) - keeping session ID ${session.sessionId} for resume`);
                         // If we were in YOLO mode, downgrade first message to acceptEdits
-                        if (mode && (mode.permissionMode === 'bypassPermissions' || mode.permissionMode === 'dangerouslySkipPermissions')) {
-                            originalYoloMode = mode.permissionMode;
+                        const currentMode = getCurrentMode();
+                        if (currentMode && (currentMode.permissionMode === 'bypassPermissions' || currentMode.permissionMode === 'dangerouslySkipPermissions')) {
+                            originalYoloMode = currentMode.permissionMode;
                             downgradeYoloForFirstMessage = true;
                             logger.debug(`[remote]: YOLO mode abort - will downgrade first message to acceptEdits, then restore ${originalYoloMode}`);
                         }
@@ -497,8 +501,9 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                     if (controller.signal.aborted) {
                         logger.debug(`[remote]: Non-AbortError after abort - keeping session ID ${session.sessionId} for resume`);
                         // If we were in YOLO mode, downgrade first message to acceptEdits
-                        if (mode && (mode.permissionMode === 'bypassPermissions' || mode.permissionMode === 'dangerouslySkipPermissions')) {
-                            originalYoloMode = mode.permissionMode;
+                        const currentMode = getCurrentMode();
+                        if (currentMode && (currentMode.permissionMode === 'bypassPermissions' || currentMode.permissionMode === 'dangerouslySkipPermissions')) {
+                            originalYoloMode = currentMode.permissionMode;
                             downgradeYoloForFirstMessage = true;
                             logger.debug(`[remote]: YOLO mode abort - will downgrade first message to acceptEdits, then restore ${originalYoloMode}`);
                         }
@@ -520,9 +525,10 @@ class ClaudeRemoteLauncher extends RemoteLauncherBase {
                         // every subsequent message would crash with the same error.
                         const isRootPermissionCrash = errorMessage.includes('dangerously-skip-permissions')
                             && (errorMessage.includes('root') || errorMessage.includes('sudo'));
-                        if (isRootPermissionCrash && mode) {
+                        const currentMode = getCurrentMode();
+                        if (isRootPermissionCrash && currentMode) {
                             logger.debug('[remote]: Root/sudo permission crash detected - downgrading to acceptEdits');
-                            mode = { ...mode, permissionMode: 'acceptEdits' as PermissionMode };
+                            mode = { ...currentMode, permissionMode: 'acceptEdits' as PermissionMode };
                             permissionHandler.handleModeChange('acceptEdits' as PermissionMode);
                             session.client.sendSessionEvent({
                                 type: 'message',

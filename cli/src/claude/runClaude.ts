@@ -1,6 +1,6 @@
 import { logger } from '@/ui/logger';
 import { loop } from '@/claude/loop';
-import { AgentState, SessionModelMode } from '@/api/types';
+import { AgentState, SessionModelMode, SessionThinkingLevel } from '@/api/types';
 import { EnhancedMode, PermissionMode } from './loop';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
 import { hashObject } from '@/utils/deterministicJson';
@@ -14,23 +14,19 @@ import { registerKillSessionHandler } from './registerKillSessionHandler';
 import type { Session } from './session';
 import { bootstrapSession } from '@/agent/sessionFactory';
 import { createModeChangeHandler, createRunnerLifecycle, setControlledByUser } from '@/agent/runnerLifecycle';
-import { isModelModeAllowedForFlavor, isPermissionModeAllowedForFlavor } from '@hapi/protocol';
-import { ModelModeSchema, PermissionModeSchema } from '@hapi/protocol/schemas';
+import { isModelModeAllowedForFlavor, isPermissionModeAllowedForFlavor, isThinkingLevelAllowedForModel } from '@hapi/protocol';
+import { ModelModeSchema, PermissionModeSchema, ThinkingLevelSchema } from '@hapi/protocol/schemas';
 import { formatMessageWithAttachments } from '@/utils/attachmentFormatter';
-
-/** Map HAPI model mode short aliases to the Claude Code model string.
- *  opus[1m] enables the 1M token context window (included for Max/Team, extra usage for Pro). */
-const MODEL_ID_MAP: Record<string, string> = {
-    default: 'opus[1m]',
-    opus: 'opus[1m]',
-    sonnet: 'sonnet',
-}
-function resolveModelId(modelMode: SessionModelMode): string | undefined {
-    return MODEL_ID_MAP[modelMode] ?? undefined
-}
+import {
+    normalizeThinkingLevelForModel,
+    resolveClaudeModelId,
+    resolveClaudeModelMode,
+    resolveClaudeThinkingLevel
+} from './modelOptions';
 
 export interface StartOptions {
     model?: string
+    thinkingLevel?: string
     permissionMode?: PermissionMode
     startingMode?: 'local' | 'remote'
     shouldStartRunner?: boolean
@@ -145,6 +141,7 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
     const messageQueue = new MessageQueue2<EnhancedMode>(mode => hashObject({
         isPlan: mode.permissionMode === 'plan',
         model: mode.model,
+        thinkingLevel: mode.thinkingLevel,
         fallbackModel: mode.fallbackModel,
         customSystemPrompt: mode.customSystemPrompt,
         appendSystemPrompt: mode.appendSystemPrompt,
@@ -154,7 +151,11 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
 
     // Forward messages to the queue
     let currentPermissionMode: PermissionMode = options.permissionMode ?? 'default';
-    let currentModelMode: SessionModelMode = options.model === 'sonnet' || options.model === 'opus' ? options.model : 'default'; // 'auto' → 'default'
+    let currentModelMode: SessionModelMode = resolveClaudeModelMode(options.model);
+    let currentThinkingLevel: SessionThinkingLevel = normalizeThinkingLevelForModel(
+        resolveClaudeThinkingLevel(options.thinkingLevel),
+        currentModelMode
+    );
     let currentFallbackModel: string | undefined = undefined; // Track current fallback model
     let currentCustomSystemPrompt: string | undefined = undefined; // Track current custom system prompt
     let currentAppendSystemPrompt: string | undefined = undefined; // Track current append system prompt
@@ -168,7 +169,8 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
         }
         sessionInstance.setPermissionMode(currentPermissionMode);
         sessionInstance.setModelMode(currentModelMode);
-        logger.debug(`[loop] Synced session modes for keepalive: permissionMode=${currentPermissionMode}, modelMode=${currentModelMode}`);
+        sessionInstance.setThinkingLevel(currentThinkingLevel);
+        logger.debug(`[loop] Synced session modes for keepalive: permissionMode=${currentPermissionMode}, modelMode=${currentModelMode}, thinkingLevel=${currentThinkingLevel}`);
     };
     session.onUserMessage((message) => {
         const sessionPermissionMode = currentSessionRef.current?.getPermissionMode();
@@ -176,8 +178,8 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
             currentPermissionMode = sessionPermissionMode as PermissionMode;
         }
         const messagePermissionMode = currentPermissionMode;
-        const messageModel = resolveModelId(currentModelMode);
-        logger.debug(`[loop] User message received with permission mode: ${currentPermissionMode}, model: ${currentModelMode}`);
+        const messageModel = resolveClaudeModelId(currentModelMode);
+        logger.debug(`[loop] User message received with permission mode: ${currentPermissionMode}, model: ${currentModelMode}, thinkingLevel: ${currentThinkingLevel}`);
 
         // Resolve custom system prompt - use message.meta.customSystemPrompt if provided, otherwise use current
         let messageCustomSystemPrompt = currentCustomSystemPrompt;
@@ -240,6 +242,7 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
             const enhancedMode: EnhancedMode = {
                 permissionMode: messagePermissionMode ?? 'default',
                 model: messageModel,
+                thinkingLevel: currentThinkingLevel,
                 fallbackModel: messageFallbackModel,
                 customSystemPrompt: messageCustomSystemPrompt,
                 appendSystemPrompt: messageAppendSystemPrompt,
@@ -258,6 +261,7 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
             const enhancedMode: EnhancedMode = {
                 permissionMode: messagePermissionMode ?? 'default',
                 model: messageModel,
+                thinkingLevel: currentThinkingLevel,
                 fallbackModel: messageFallbackModel,
                 customSystemPrompt: messageCustomSystemPrompt,
                 appendSystemPrompt: messageAppendSystemPrompt,
@@ -275,6 +279,7 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
         const enhancedMode: EnhancedMode = {
             permissionMode: messagePermissionMode ?? 'default',
             model: messageModel,
+            thinkingLevel: currentThinkingLevel,
             fallbackModel: messageFallbackModel,
             customSystemPrompt: messageCustomSystemPrompt,
             appendSystemPrompt: messageAppendSystemPrompt,
@@ -301,11 +306,22 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
         return parsed.data;
     };
 
+    const resolveThinkingLevel = (value: unknown, modelMode: SessionModelMode): SessionThinkingLevel => {
+        const parsed = ThinkingLevelSchema.safeParse(value);
+        if (!parsed.success) {
+            throw new Error('Invalid thinking level');
+        }
+        if (!isThinkingLevelAllowedForModel(parsed.data, modelMode)) {
+            throw new Error('Thinking level is not supported for the selected model');
+        }
+        return parsed.data;
+    };
+
     session.rpcHandlerManager.registerHandler('set-session-config', async (payload: unknown) => {
         if (!payload || typeof payload !== 'object') {
             throw new Error('Invalid session config payload');
         }
-        const config = payload as { permissionMode?: unknown; modelMode?: unknown };
+        const config = payload as { permissionMode?: unknown; modelMode?: unknown; thinkingLevel?: unknown };
 
         if (config.permissionMode !== undefined) {
             currentPermissionMode = resolvePermissionMode(config.permissionMode);
@@ -314,10 +330,15 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
         if (config.modelMode !== undefined) {
             const resolvedModelMode = resolveModelMode(config.modelMode);
             currentModelMode = resolvedModelMode;
+            currentThinkingLevel = normalizeThinkingLevelForModel(currentThinkingLevel, currentModelMode);
+        }
+
+        if (config.thinkingLevel !== undefined) {
+            currentThinkingLevel = resolveThinkingLevel(config.thinkingLevel, currentModelMode);
         }
 
         syncSessionModes();
-        return { applied: { permissionMode: currentPermissionMode, modelMode: currentModelMode } };
+        return { applied: { permissionMode: currentPermissionMode, modelMode: currentModelMode, thinkingLevel: currentThinkingLevel } };
     });
 
     let loopError: unknown = null;
@@ -325,7 +346,9 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
     try {
         await loop({
             path: workingDirectory,
-            model: resolveModelId(options.model === 'sonnet' || options.model === 'opus' ? options.model : 'default'), // 'auto' → 'default' → undefined (no flag)
+            model: resolveClaudeModelId(currentModelMode),
+            modelMode: currentModelMode,
+            thinkingLevel: currentThinkingLevel,
             permissionMode: options.permissionMode,
             startingMode,
             messageQueue,

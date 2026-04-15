@@ -1,4 +1,5 @@
 import { claudeLocal } from "./claudeLocal";
+import { resolveClaudeModelId } from "./modelOptions";
 import { Session } from "./session";
 import { createSessionScanner } from "./utils/sessionScanner";
 import { BaseLocalLauncher } from "@/modules/common/launcher/BaseLocalLauncher";
@@ -40,6 +41,8 @@ export async function claudeLocalLauncher(session: Session): Promise<'switch' | 
                 mcpServers: session.mcpServers,
                 allowedTools: session.allowedTools,
                 hookSettingsPath: session.hookSettingsPath,
+                model: resolveClaudeModelId(session.getModelMode()),
+                thinkingLevel: session.getThinkingLevel(),
                 permissionMode: session.getPermissionMode(),
             });
         },

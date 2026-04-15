@@ -1,4 +1,11 @@
-import { getPermissionModeOptionsForFlavor, MODEL_MODE_LABELS, MODEL_MODES } from '@hapi/protocol'
+import {
+    getPermissionModeOptionsForFlavor,
+    isThinkingLevelAllowedForModel,
+    MODEL_MODE_LABELS,
+    MODEL_MODES,
+    THINKING_LEVEL_LABELS,
+    THINKING_LEVELS
+} from '@hapi/protocol'
 import { ComposerPrimitive, useAssistantApi, useAssistantState } from '@assistant-ui/react'
 import {
     type ChangeEvent as ReactChangeEvent,
@@ -12,7 +19,7 @@ import {
     useRef,
     useState
 } from 'react'
-import type { AgentState, ModelMode, PermissionMode } from '@/types/api'
+import type { AgentState, ModelMode, PermissionMode, ThinkingLevel } from '@/types/api'
 import type { Suggestion } from '@/hooks/useActiveSuggestions'
 import type { ConversationStatus } from '@/realtime/types'
 import { useActiveWord } from '@/hooks/useActiveWord'
@@ -40,6 +47,7 @@ export function HappyComposer(props: {
     disabled?: boolean
     permissionMode?: PermissionMode
     modelMode?: ModelMode
+    thinkingLevel?: ThinkingLevel
     active?: boolean
     allowSendWhenInactive?: boolean
     thinking?: boolean
@@ -49,6 +57,7 @@ export function HappyComposer(props: {
     agentFlavor?: string | null
     onPermissionModeChange?: (mode: PermissionMode) => void
     onModelModeChange?: (mode: ModelMode) => void
+    onThinkingLevelChange?: (thinkingLevel: ThinkingLevel) => void
     onSwitchToRemote?: () => void
     onTerminal?: () => void
     autocompletePrefixes?: string[]
@@ -64,6 +73,7 @@ export function HappyComposer(props: {
         disabled = false,
         permissionMode: rawPermissionMode,
         modelMode: rawModelMode,
+        thinkingLevel: rawThinkingLevel,
         active = true,
         allowSendWhenInactive = false,
         thinking = false,
@@ -73,6 +83,7 @@ export function HappyComposer(props: {
         agentFlavor,
         onPermissionModeChange,
         onModelModeChange,
+        onThinkingLevelChange,
         onSwitchToRemote,
         onTerminal,
         autocompletePrefixes = ['@', '/', '$'],
@@ -86,6 +97,7 @@ export function HappyComposer(props: {
     // Use ?? so missing values fall back to default (destructuring defaults only handle undefined)
     const permissionMode = rawPermissionMode ?? 'default'
     const modelMode = rawModelMode ?? 'default'
+    const thinkingLevel = rawThinkingLevel ?? 'medium'
 
     const api = useAssistantApi()
     const composerText = useAssistantState(({ composer }) => composer.text)
@@ -389,9 +401,18 @@ export function HappyComposer(props: {
         haptic('light')
     }, [onModelModeChange, haptic])
 
+    const handleThinkingLevelChange = useCallback((nextThinkingLevel: ThinkingLevel) => {
+        if (!onThinkingLevelChange) return
+        if (!isThinkingLevelAllowedForModel(nextThinkingLevel, modelMode)) return
+        onThinkingLevelChange(nextThinkingLevel)
+        setShowSettings(false)
+        haptic('light')
+    }, [onThinkingLevelChange, modelMode, haptic])
+
     const showPermissionSettings = Boolean(onPermissionModeChange && permissionModeOptions.length > 0)
     const showModelSettings = Boolean(onModelModeChange && !isCodexFamilyFlavor(agentFlavor))
-    const showSettingsButton = Boolean(showPermissionSettings || showModelSettings)
+    const showThinkingSettings = Boolean(onThinkingLevelChange && !isCodexFamilyFlavor(agentFlavor))
+    const showSettingsButton = Boolean(showPermissionSettings || showModelSettings || showThinkingSettings)
     const showAbortButton = true
     const voiceEnabled = Boolean(onVoiceToggle)
 
@@ -400,7 +421,7 @@ export function HappyComposer(props: {
     }, [api])
 
     const overlays = useMemo(() => {
-        if (showSettings && (showPermissionSettings || showModelSettings)) {
+        if (showSettings && (showPermissionSettings || showModelSettings || showThinkingSettings)) {
             return (
                 <div className="absolute bottom-[100%] mb-2 w-full">
                     <FloatingOverlay maxHeight={320}>
@@ -436,7 +457,7 @@ export function HappyComposer(props: {
                             </div>
                         ) : null}
 
-                        {showPermissionSettings && showModelSettings ? (
+                        {showPermissionSettings && (showModelSettings || showThinkingSettings) ? (
                             <div className="mx-3 h-px bg-[var(--app-divider)]" />
                         ) : null}
 
@@ -471,6 +492,50 @@ export function HappyComposer(props: {
                                 ))}
                             </div>
                         ) : null}
+
+                        {showModelSettings && showThinkingSettings ? (
+                            <div className="mx-3 h-px bg-[var(--app-divider)]" />
+                        ) : null}
+
+                        {showThinkingSettings ? (
+                            <div className="py-2">
+                                <div className="px-3 pb-1 text-xs font-semibold text-[var(--app-hint)]">
+                                    {t('misc.thinkingLevel')}
+                                </div>
+                                {THINKING_LEVELS.map((level) => {
+                                    const allowed = isThinkingLevelAllowedForModel(level, modelMode)
+                                    const pickerLabel = level === 'max'
+                                        ? `${THINKING_LEVEL_LABELS[level]} (Opus 4.6 only)`
+                                        : THINKING_LEVEL_LABELS[level]
+
+                                    return (
+                                        <button
+                                            key={level}
+                                            type="button"
+                                            className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${allowed ? 'cursor-pointer hover:bg-[var(--app-secondary-bg)]' : 'cursor-not-allowed opacity-50'}`}
+                                            onClick={() => handleThinkingLevelChange(level)}
+                                            onMouseDown={(e) => e.preventDefault()}
+                                            disabled={!allowed}
+                                        >
+                                            <div
+                                                className={`flex h-4 w-4 items-center justify-center rounded-full border-2 ${
+                                                    thinkingLevel === level
+                                                        ? 'border-[var(--app-link)]'
+                                                        : 'border-[var(--app-hint)]'
+                                                }`}
+                                            >
+                                                {thinkingLevel === level && (
+                                                    <div className="h-2 w-2 rounded-full bg-[var(--app-link)]" />
+                                                )}
+                                            </div>
+                                            <span className={thinkingLevel === level ? 'text-[var(--app-link)]' : ''}>
+                                                {pickerLabel}
+                                            </span>
+                                        </button>
+                                    )
+                                })}
+                            </div>
+                        ) : null}
                     </FloatingOverlay>
                 </div>
             )
@@ -495,14 +560,16 @@ export function HappyComposer(props: {
         showSettings,
         showPermissionSettings,
         showModelSettings,
+        showThinkingSettings,
         suggestions,
         selectedIndex,
-        controlsDisabled,
         permissionMode,
         modelMode,
+        thinkingLevel,
         permissionModeOptions,
         handlePermissionChange,
         handleModelChange,
+        handleThinkingLevelChange,
         handleSuggestionSelect
     ])
 
@@ -518,6 +585,7 @@ export function HappyComposer(props: {
                         agentState={agentState}
                         contextSize={contextSize}
                         modelMode={modelMode}
+                        thinkingLevel={thinkingLevel}
                         permissionMode={permissionMode}
                         agentFlavor={agentFlavor}
                         voiceStatus={voiceStatus}

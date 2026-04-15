@@ -4,9 +4,10 @@ import {
     MetadataSchema,
     ModelModeSchema,
     PermissionModeSchema,
+    ThinkingLevelSchema,
     TodosSchema
 } from '@hapi/protocol/schemas'
-import type { ModelMode, PermissionMode } from '@hapi/protocol/types'
+import type { ModelMode, PermissionMode, ThinkingLevel } from '@hapi/protocol/types'
 import { z } from 'zod'
 import { UsageSchema } from '@/claude/types'
 
@@ -22,6 +23,7 @@ export type {
 } from '@hapi/protocol/types'
 export type SessionPermissionMode = PermissionMode
 export type SessionModelMode = ModelMode
+export type SessionThinkingLevel = ThinkingLevel
 
 export { AgentStateSchema, AttachmentMetadataSchema, MetadataSchema }
 
@@ -90,7 +92,8 @@ export const CreateSessionResponseSchema = z.object({
         thinkingAt: z.number(),
         todos: TodosSchema.optional(),
         permissionMode: PermissionModeSchema.optional(),
-        modelMode: ModelModeSchema.optional()
+        modelMode: ModelModeSchema.optional(),
+        thinkingLevel: ThinkingLevelSchema.optional()
     })
 })
 

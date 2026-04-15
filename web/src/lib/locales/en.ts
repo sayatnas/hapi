@@ -266,6 +266,7 @@ export default {
   'misc.machine': 'Machine',
   'misc.permissionMode': 'Permission Mode',
   'misc.model': 'Model',
+  'misc.thinkingLevel': 'Thinking Level',
   'misc.loading': 'Loading…',
   'misc.loadOlder': 'Load older',
   'misc.newMessage': '{n} new message{s}',

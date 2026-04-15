@@ -20,6 +20,8 @@ export async function claudeLocal(opts: {
     claudeArgs?: string[]
     allowedTools?: string[]
     hookSettingsPath: string
+    model?: string
+    thinkingLevel?: string
     permissionMode?: string
 }) {
 
@@ -63,9 +65,31 @@ export async function claudeLocal(opts: {
         args.push('--allowedTools', opts.allowedTools.join(','));
     }
 
-    // Add custom Claude arguments (filter out --dangerously-skip-permissions, handled below)
+    if (opts.model) {
+        args.push('--model', opts.model);
+    }
+
+    if (opts.thinkingLevel) {
+        args.push('--effort', opts.thinkingLevel);
+    }
+
+    // Add custom Claude arguments (filter out flags HAPI manages directly)
     if (opts.claudeArgs) {
-        const filtered = opts.claudeArgs.filter(a => a !== '--dangerously-skip-permissions');
+        const filtered: string[] = [];
+        for (let i = 0; i < opts.claudeArgs.length; i++) {
+            const arg = opts.claudeArgs[i];
+            if (
+                arg === '--dangerously-skip-permissions'
+                || arg === '--model'
+                || arg === '--effort'
+            ) {
+                if ((arg === '--model' || arg === '--effort') && i + 1 < opts.claudeArgs.length) {
+                    i++;
+                }
+                continue;
+            }
+            filtered.push(arg);
+        }
         if (filtered.length > 0) {
             args.push(...filtered);
         }

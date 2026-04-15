@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { AssistantRuntimeProvider } from '@assistant-ui/react'
 import type { ApiClient } from '@/api/client'
-import type { AttachmentMetadata, DecryptedMessage, ModelMode, PermissionMode, Session } from '@/types/api'
+import type { AttachmentMetadata, DecryptedMessage, ModelMode, PermissionMode, Session, ThinkingLevel } from '@/types/api'
 import type { ChatBlock, NormalizedMessage } from '@/chat/types'
 import type { Suggestion } from '@/hooks/useActiveSuggestions'
 import { normalizeDecryptedMessage } from '@/chat/normalize'
@@ -45,7 +45,7 @@ export function SessionChat(props: {
     const blocksByIdRef = useRef<Map<string, ChatBlock>>(new Map())
     const [forceScrollToken, setForceScrollToken] = useState(0)
     const agentFlavor = props.session.metadata?.flavor ?? null
-    const { abortSession, switchSession, setPermissionMode, setModelMode } = useSessionActions(
+    const { abortSession, switchSession, setPermissionMode, setModelMode, setThinkingLevel } = useSessionActions(
         props.api,
         props.session.id,
         agentFlavor
@@ -209,6 +209,17 @@ export function SessionChat(props: {
         }
     }, [setModelMode, props.onRefresh, haptic])
 
+    const handleThinkingLevelChange = useCallback(async (thinkingLevel: ThinkingLevel) => {
+        try {
+            await setThinkingLevel(thinkingLevel, props.session.modelMode)
+            haptic.notification('success')
+            props.onRefresh()
+        } catch (e) {
+            haptic.notification('error')
+            console.error('Failed to set thinking level:', e)
+        }
+    }, [setThinkingLevel, props.session.modelMode, props.onRefresh, haptic])
+
     // Abort handler
     const handleAbort = useCallback(async () => {
         await abortSession()
@@ -300,6 +311,7 @@ export function SessionChat(props: {
                         disabled={props.isSending}
                         permissionMode={props.session.permissionMode}
                         modelMode={props.session.modelMode}
+                        thinkingLevel={props.session.thinkingLevel}
                         agentFlavor={agentFlavor}
                         active={props.session.active}
                         allowSendWhenInactive
@@ -309,6 +321,7 @@ export function SessionChat(props: {
                         controlledByUser={props.session.agentState?.controlledByUser === true}
                         onPermissionModeChange={handlePermissionModeChange}
                         onModelModeChange={handleModelModeChange}
+                        onThinkingLevelChange={handleThinkingLevelChange}
                         onSwitchToRemote={handleSwitchToRemote}
                         onTerminal={props.session.active ? handleViewTerminal : undefined}
                         autocompleteSuggestions={props.autocompleteSuggestions}

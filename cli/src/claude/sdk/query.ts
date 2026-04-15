@@ -299,6 +299,7 @@ export function query(config: {
             continue: continueConversation,
             resume,
             model,
+            effortLevel,
             fallbackModel,
             settingsPath,
             strictMcpConfig,
@@ -321,6 +322,7 @@ export function query(config: {
     if (appendSystemPrompt) args.push('--append-system-prompt', stripNewlinesForWindowsShellArg(appendSystemPrompt))
     if (maxTurns) args.push('--max-turns', maxTurns.toString())
     if (model) args.push('--model', model)
+    if (effortLevel) args.push('--effort', effortLevel)
 
     // Detect root/sudo early - Claude Code rejects --dangerously-skip-permissions under root
     const isRoot = (typeof process.getuid === 'function' && process.getuid() === 0)

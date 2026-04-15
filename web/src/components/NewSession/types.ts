@@ -1,11 +1,22 @@
 export type AgentType = 'claude' | 'codex' | 'gemini' | 'opencode'
 export type SessionType = 'simple' | 'worktree'
 
+export const DEFAULT_MODEL_SELECTION: Record<AgentType, string> = {
+    claude: 'default',
+    codex: 'auto',
+    gemini: 'auto',
+    opencode: ''
+}
+
 export const MODEL_OPTIONS: Record<AgentType, { value: string; label: string }[]> = {
     claude: [
-        { value: 'auto', label: 'Auto' },
-        { value: 'opus', label: 'Opus' },
-        { value: 'sonnet', label: 'Sonnet' },
+        { value: 'default', label: 'Default (Sonnet 4.6 [200k])' },
+        { value: 'claude-opus-4-5-20251101', label: 'claude-opus-4-5-20251101' },
+        { value: 'sonnet', label: 'Sonnet 4.6 [200k]' },
+        { value: 'sonnet[1m]', label: 'Sonnet 4.6 [1m]' },
+        { value: 'opus', label: 'Opus 4.6 [200k]' },
+        { value: 'opus[1m]', label: 'Opus 4.6 [1m]' },
+        { value: 'claude-sonnet-4-5-20250929', label: 'claude-sonnet-4-5-20250929' },
     ],
     codex: [
         { value: 'auto', label: 'Auto' },

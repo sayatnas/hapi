@@ -8,6 +8,7 @@ import { useActiveSuggestions, type Suggestion } from '@/hooks/useActiveSuggesti
 import { useDirectorySuggestions } from '@/hooks/useDirectorySuggestions'
 import { useRecentPaths } from '@/hooks/useRecentPaths'
 import type { AgentType, SessionType } from './types'
+import { DEFAULT_MODEL_SELECTION } from './types'
 import { ActionButtons } from './ActionButtons'
 import { AgentSelector } from './AgentSelector'
 import { DirectorySection } from './DirectorySection'
@@ -35,7 +36,7 @@ export function NewSession(props: {
     const [isDirectoryFocused, setIsDirectoryFocused] = useState(false)
     const [pathExistence, setPathExistence] = useState<Record<string, boolean>>({})
     const [agent, setAgent] = useState<AgentType>('claude')
-    const [model, setModel] = useState('auto')
+    const [model, setModel] = useState(DEFAULT_MODEL_SELECTION.claude)
     const [yoloMode, setYoloMode] = useState(false)
     const [sessionType, setSessionType] = useState<SessionType>('simple')
     const [worktreeName, setWorktreeName] = useState('')
@@ -49,7 +50,7 @@ export function NewSession(props: {
     }, [sessionType])
 
     useEffect(() => {
-        setModel('auto')
+        setModel(DEFAULT_MODEL_SELECTION[agent])
     }, [agent])
 
     useEffect(() => {
@@ -195,7 +196,11 @@ export function NewSession(props: {
 
         setError(null)
         try {
-            const resolvedModel = model !== 'auto' && agent !== 'opencode' ? model : undefined
+            const resolvedModel = agent === 'claude'
+                ? model
+                : model && model !== DEFAULT_MODEL_SELECTION[agent] && agent !== 'opencode'
+                    ? model
+                    : undefined
             const result = await spawnSession({
                 machineId,
                 directory: directory.trim(),

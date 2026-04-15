@@ -1,3 +1,4 @@
+import { getModelModeLabel } from '@hapi/protocol'
 import { useId, useMemo, useRef, useState } from 'react'
 import type { Session } from '@/types/api'
 import type { ApiClient } from '@/api/client'
@@ -139,7 +140,7 @@ export function SessionHeader(props: {
                                 {session.metadata?.flavor?.trim() || 'unknown'}
                             </span>
                             <span>
-                                {t('session.item.modelMode')}: {session.modelMode || 'default'}
+                                {t('session.item.modelMode')}: {getModelModeLabel(session.modelMode ?? 'default')}
                             </span>
                             {worktreeBranch ? (
                                 <span>{t('session.item.worktree')}: {worktreeBranch}</span>

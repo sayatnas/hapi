@@ -70,7 +70,8 @@ export class ApiClient {
             thinkingAt: raw.thinkingAt,
             todos: raw.todos,
             permissionMode: raw.permissionMode,
-            modelMode: raw.modelMode
+            modelMode: raw.modelMode,
+            thinkingLevel: raw.thinkingLevel
         }
     }
 

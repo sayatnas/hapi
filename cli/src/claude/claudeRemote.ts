@@ -175,6 +175,7 @@ export async function claudeRemote(opts: {
         mcpServers: opts.mcpServers,
         permissionMode: initial.mode.permissionMode,
         model: initial.mode.model,
+        effortLevel: initial.mode.thinkingLevel,
         fallbackModel: initial.mode.fallbackModel,
         customSystemPrompt: initial.mode.customSystemPrompt ? initial.mode.customSystemPrompt + '\n\n' + systemPrompt : undefined,
         appendSystemPrompt: baseAppendPrompt,

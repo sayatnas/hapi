@@ -11,6 +11,7 @@ import type {
     MessagesResponse,
     ModelMode,
     PermissionMode,
+    ThinkingLevel,
     PushSubscriptionPayload,
     PushUnsubscribePayload,
     PushVapidPublicKeyResponse,
@@ -324,6 +325,13 @@ export class ApiClient {
         await this.request(`/api/sessions/${encodeURIComponent(sessionId)}/model`, {
             method: 'POST',
             body: JSON.stringify({ model })
+        })
+    }
+
+    async setThinkingLevel(sessionId: string, thinkingLevel: ThinkingLevel): Promise<void> {
+        await this.request(`/api/sessions/${encodeURIComponent(sessionId)}/thinking-level`, {
+            method: 'POST',
+            body: JSON.stringify({ thinkingLevel })
         })
     }
 

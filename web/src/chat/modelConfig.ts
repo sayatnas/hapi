@@ -13,9 +13,13 @@ import type { ModelMode } from '@/types/api'
 const CONTEXT_HEADROOM_TOKENS = 10_000
 
 const MODEL_CONTEXT_WINDOWS: Record<ModelMode, number> = {
-    default: 1_000_000, // Opus 4.6 (1M context) — Auto defaults to opus[1m]
-    sonnet: 200_000,    // Sonnet 4.6
-    opus: 1_000_000     // Opus 4.6 (1M context)
+    default: 200_000, // HAPI default: Sonnet 4.6 [200k]
+    'claude-opus-4-5-20251101': 200_000,
+    sonnet: 200_000,
+    'sonnet[1m]': 1_000_000,
+    opus: 200_000,
+    'opus[1m]': 1_000_000,
+    'claude-sonnet-4-5-20250929': 200_000
 }
 
 export function getContextBudgetTokens(modelMode: ModelMode | undefined): number | null {

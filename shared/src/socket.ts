@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ModelMode, PermissionMode } from './modes'
+import type { ModelMode, PermissionMode, ThinkingLevel } from './modes'
 
 export type SocketErrorReason = 'namespace-missing' | 'access-denied' | 'not-found'
 
@@ -140,6 +140,7 @@ export interface ClientToServerEvents {
         mode?: 'local' | 'remote'
         permissionMode?: PermissionMode
         modelMode?: ModelMode
+        thinkingLevel?: ThinkingLevel
     }) => void
     'session-end': (data: { sid: string; time: number }) => void
     'update-metadata': (data: { sid: string; expectedVersion: number; metadata: unknown }, cb: (answer: {

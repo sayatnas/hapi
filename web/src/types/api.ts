@@ -14,6 +14,7 @@ export type {
     Session,
     SessionSummary,
     SessionSummaryMetadata,
+    ThinkingLevel,
     TodoItem,
     WorktreeMetadata
 } from '@hapi/protocol/types'

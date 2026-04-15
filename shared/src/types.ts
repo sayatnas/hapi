@@ -22,5 +22,6 @@ export type {
     ModelMode,
     PermissionMode,
     PermissionModeOption,
-    PermissionModeTone
+    PermissionModeTone,
+    ThinkingLevel
 } from './modes'

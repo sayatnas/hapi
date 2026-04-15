@@ -22,8 +22,19 @@ export const PERMISSION_MODES = [
 ] as const
 export type PermissionMode = typeof PERMISSION_MODES[number]
 
-export const MODEL_MODES = ['default', 'sonnet', 'opus'] as const
+export const MODEL_MODES = [
+    'default',
+    'claude-opus-4-5-20251101',
+    'sonnet',
+    'sonnet[1m]',
+    'opus',
+    'opus[1m]',
+    'claude-sonnet-4-5-20250929'
+] as const
 export type ModelMode = typeof MODEL_MODES[number]
+
+export const THINKING_LEVELS = ['low', 'medium', 'high', 'max'] as const
+export type ThinkingLevel = typeof THINKING_LEVELS[number]
 
 export type AgentFlavor = 'claude' | 'codex' | 'gemini' | 'opencode'
 
@@ -58,9 +69,20 @@ export type PermissionModeOption = {
 }
 
 export const MODEL_MODE_LABELS: Record<ModelMode, string> = {
-    default: 'Default',
-    sonnet: 'Sonnet',
-    opus: 'Opus'
+    default: 'Default (Sonnet 4.6 [200k])',
+    'claude-opus-4-5-20251101': 'claude-opus-4-5-20251101',
+    sonnet: 'Sonnet 4.6 [200k]',
+    'sonnet[1m]': 'Sonnet 4.6 [1m]',
+    opus: 'Opus 4.6 [200k]',
+    'opus[1m]': 'Opus 4.6 [1m]',
+    'claude-sonnet-4-5-20250929': 'claude-sonnet-4-5-20250929'
+}
+
+export const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
+    low: 'Low',
+    medium: 'Medium',
+    high: 'High',
+    max: 'Max'
 }
 
 export function getPermissionModeLabel(mode: PermissionMode): string {
@@ -69,6 +91,14 @@ export function getPermissionModeLabel(mode: PermissionMode): string {
 
 export function getPermissionModeTone(mode: PermissionMode): PermissionModeTone {
     return PERMISSION_MODE_TONES[mode]
+}
+
+export function getModelModeLabel(mode: ModelMode): string {
+    return MODEL_MODE_LABELS[mode]
+}
+
+export function getThinkingLevelLabel(level: ThinkingLevel): string {
+    return THINKING_LEVEL_LABELS[level]
 }
 
 export function getPermissionModesForFlavor(flavor?: string | null): readonly PermissionMode[] {
@@ -105,4 +135,16 @@ export function getModelModesForFlavor(flavor?: string | null): readonly ModelMo
 
 export function isModelModeAllowedForFlavor(mode: ModelMode, flavor?: string | null): boolean {
     return getModelModesForFlavor(flavor).includes(mode)
+}
+
+export function getThinkingLevelsForModel(modelMode?: ModelMode): readonly ThinkingLevel[] {
+    const resolvedModelMode = modelMode ?? 'default'
+    if (resolvedModelMode === 'opus' || resolvedModelMode === 'opus[1m]') {
+        return THINKING_LEVELS
+    }
+    return THINKING_LEVELS.filter((level) => level !== 'max')
+}
+
+export function isThinkingLevelAllowedForModel(level: ThinkingLevel, modelMode?: ModelMode): boolean {
+    return getThinkingLevelsForModel(modelMode).includes(level)
 }

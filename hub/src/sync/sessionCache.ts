@@ -1,5 +1,6 @@
+import { isThinkingLevelAllowedForModel } from '@hapi/protocol'
 import { AgentStateSchema, MetadataSchema } from '@hapi/protocol/schemas'
-import type { ModelMode, PermissionMode, Session } from '@hapi/protocol/types'
+import type { ModelMode, PermissionMode, Session, ThinkingLevel } from '@hapi/protocol/types'
 import type { Store } from '../store'
 import { clampAliveTime } from './aliveTime'
 import { EventPublisher } from './eventPublisher'
@@ -120,7 +121,8 @@ export class SessionCache {
             thinkingAt: existing?.thinkingAt ?? 0,
             todos,
             permissionMode: existing?.permissionMode,
-            modelMode: existing?.modelMode
+            modelMode: existing?.modelMode,
+            thinkingLevel: existing?.thinkingLevel
         }
 
         this.sessions.set(sessionId, session)
@@ -142,6 +144,7 @@ export class SessionCache {
         mode?: 'local' | 'remote'
         permissionMode?: PermissionMode
         modelMode?: ModelMode
+        thinkingLevel?: ThinkingLevel
     }): void {
         const t = clampAliveTime(payload.time)
         if (!t) return
@@ -153,6 +156,7 @@ export class SessionCache {
         const wasThinking = session.thinking
         const previousPermissionMode = session.permissionMode
         const previousModelMode = session.modelMode
+        const previousThinkingLevel = session.thinkingLevel
 
         session.active = true
         session.activeAt = Math.max(session.activeAt, t)
@@ -164,10 +168,15 @@ export class SessionCache {
         if (payload.modelMode !== undefined) {
             session.modelMode = payload.modelMode
         }
+        if (payload.thinkingLevel !== undefined) {
+            session.thinkingLevel = payload.thinkingLevel
+        }
 
         const now = Date.now()
         const lastBroadcastAt = this.lastBroadcastAtBySessionId.get(session.id) ?? 0
-        const modeChanged = previousPermissionMode !== session.permissionMode || previousModelMode !== session.modelMode
+        const modeChanged = previousPermissionMode !== session.permissionMode
+            || previousModelMode !== session.modelMode
+            || previousThinkingLevel !== session.thinkingLevel
         const shouldBroadcast = (!wasActive && session.active)
             || (wasThinking !== session.thinking)
             || modeChanged
@@ -182,7 +191,8 @@ export class SessionCache {
                     activeAt: session.activeAt,
                     thinking: session.thinking,
                     permissionMode: session.permissionMode,
-                    modelMode: session.modelMode
+                    modelMode: session.modelMode,
+                    thinkingLevel: session.thinkingLevel
                 }
             })
         }
@@ -259,7 +269,7 @@ export class SessionCache {
         }
     }
 
-    applySessionConfig(sessionId: string, config: { permissionMode?: PermissionMode; modelMode?: ModelMode }): void {
+    applySessionConfig(sessionId: string, config: { permissionMode?: PermissionMode; modelMode?: ModelMode; thinkingLevel?: ThinkingLevel }): void {
         const session = this.sessions.get(sessionId) ?? this.refreshSession(sessionId)
         if (!session) {
             return
@@ -270,6 +280,12 @@ export class SessionCache {
         }
         if (config.modelMode !== undefined) {
             session.modelMode = config.modelMode
+            if (session.thinkingLevel === 'max' && !isThinkingLevelAllowedForModel('max', session.modelMode)) {
+                session.thinkingLevel = 'high'
+            }
+        }
+        if (config.thinkingLevel !== undefined) {
+            session.thinkingLevel = config.thinkingLevel
         }
 
         this.publisher.emit({ type: 'session-updated', sessionId, data: session })

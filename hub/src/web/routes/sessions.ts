@@ -1,5 +1,5 @@
-import { getPermissionModesForFlavor, isModelModeAllowedForFlavor, isPermissionModeAllowedForFlavor, toSessionSummary } from '@hapi/protocol'
-import { ModelModeSchema, PermissionModeSchema } from '@hapi/protocol/schemas'
+import { getPermissionModesForFlavor, isModelModeAllowedForFlavor, isPermissionModeAllowedForFlavor, isThinkingLevelAllowedForModel, toSessionSummary } from '@hapi/protocol'
+import { ModelModeSchema, PermissionModeSchema, ThinkingLevelSchema } from '@hapi/protocol/schemas'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { SyncEngine, Session } from '../../sync/syncEngine'
@@ -12,6 +12,10 @@ const permissionModeSchema = z.object({
 
 const modelModeSchema = z.object({
     model: ModelModeSchema
+})
+
+const thinkingLevelSchema = z.object({
+    thinkingLevel: ThinkingLevelSchema
 })
 
 const renameSessionSchema = z.object({
@@ -287,6 +291,42 @@ export function createSessionsRoutes(getSyncEngine: () => SyncEngine | null): Ho
             return c.json({ ok: true })
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to apply model mode'
+            return c.json({ error: message }, 409)
+        }
+    })
+
+    app.post('/sessions/:id/thinking-level', async (c) => {
+        const engine = requireSyncEngine(c, getSyncEngine)
+        if (engine instanceof Response) {
+            return engine
+        }
+
+        const sessionResult = requireSessionFromParam(c, engine, { requireActive: true })
+        if (sessionResult instanceof Response) {
+            return sessionResult
+        }
+
+        const body = await c.req.json().catch(() => null)
+        const parsed = thinkingLevelSchema.safeParse(body)
+        if (!parsed.success) {
+            return c.json({ error: 'Invalid body' }, 400)
+        }
+
+        const flavor = sessionResult.session.metadata?.flavor ?? 'claude'
+        if (flavor !== 'claude') {
+            return c.json({ error: 'Thinking level is only supported for Claude sessions' }, 400)
+        }
+
+        const currentModelMode = sessionResult.session.modelMode ?? 'default'
+        if (!isThinkingLevelAllowedForModel(parsed.data.thinkingLevel, currentModelMode)) {
+            return c.json({ error: 'Thinking level is not supported for the selected model' }, 400)
+        }
+
+        try {
+            await engine.applySessionConfig(sessionResult.sessionId, { thinkingLevel: parsed.data.thinkingLevel })
+            return c.json({ ok: true })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to apply thinking level'
             return c.json({ error: message }, 409)
         }
     })
