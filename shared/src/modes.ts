@@ -29,6 +29,8 @@ export const MODEL_MODES = [
     'sonnet[1m]',
     'opus',
     'opus[1m]',
+    'opus-4-7',
+    'opus-4-7[1m]',
     'claude-sonnet-4-5-20250929'
 ] as const
 export type ModelMode = typeof MODEL_MODES[number]
@@ -75,6 +77,8 @@ export const MODEL_MODE_LABELS: Record<ModelMode, string> = {
     'sonnet[1m]': 'Sonnet 4.6 [1m]',
     opus: 'Opus 4.6 [200k]',
     'opus[1m]': 'Opus 4.6 [1m]',
+    'opus-4-7': 'Opus 4.7 [200k]',
+    'opus-4-7[1m]': 'Opus 4.7 [1m]',
     'claude-sonnet-4-5-20250929': 'claude-sonnet-4-5-20250929'
 }
 
@@ -139,7 +143,7 @@ export function isModelModeAllowedForFlavor(mode: ModelMode, flavor?: string | n
 
 export function getThinkingLevelsForModel(modelMode?: ModelMode): readonly ThinkingLevel[] {
     const resolvedModelMode = modelMode ?? 'default'
-    if (resolvedModelMode === 'opus' || resolvedModelMode === 'opus[1m]') {
+    if (resolvedModelMode === 'opus' || resolvedModelMode === 'opus[1m]' || resolvedModelMode === 'opus-4-7' || resolvedModelMode === 'opus-4-7[1m]') {
         return THINKING_LEVELS
     }
     return THINKING_LEVELS.filter((level) => level !== 'max')

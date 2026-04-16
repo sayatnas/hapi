@@ -11,6 +11,8 @@ export const CLAUDE_MODEL_ID_MAP: Record<ModelMode, string> = {
     'sonnet[1m]': 'sonnet[1m]',
     opus: 'opus',
     'opus[1m]': 'opus[1m]',
+    'opus-4-7': 'claude-opus-4-7-20260416',
+    'opus-4-7[1m]': 'claude-opus-4-7-20260416[1m]',
     'claude-sonnet-4-5-20250929': 'claude-sonnet-4-5-20250929'
 }
 
